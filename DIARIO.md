@@ -290,6 +290,33 @@ A revisão mostrou que o equilíbrio era estável, mas com margens estreitas: `h
 
 **Próximo passo:** etapa 4, a seguir: o jogador e o movimento.
 
+### O jogador entra no mundo 🧍
+
+**O que foi feito**
+
+- **O jogador vive na simulação, não só no desenho** (`Simulation::player`, `place_player`, `move_player`). Os animais reagem a ele:
+  - os coelhos tratam-no como uma ameaça, tal como uma raposa;
+  - as raposas afastam-se se ele estiver a 4 células ou menos, mesmo com fome (`human_fear`, GDD 3.1: o jogador pode afugentar um predador).
+  - Sem jogador no mapa, a simulação é exatamente a de antes, por isso os testes de equilíbrio e as varreduras não mudaram.
+- **Na janela:** o jogador é o quadrado azul e começa ao lado da cabana. Anda com as setas ou WASD, também em pausa. As setas deixaram de mudar a velocidade: agora é só `+` e `-`.
+- **Testes novos:**
+  - `o_jogador_afasta_os_animais`;
+  - `o_jogador_anda_sem_sair_do_mapa`;
+  - `raposa_foge_do_jogador_mesmo_com_fome`.
+- **Imagem em `docs/janela_jogador.png`.**
+
+**O que se aprendeu**
+
+1. **O teste contava coelhos que o jogador não vê.** Com uma toca ao lado do jogador, os coelhos corriam para ela e escondiam-se, e o teste contava-os como "perto".
+2. **Tentei e desfiz uma regra que parecia de bom senso.** A regra era que o coelho só foge para tocas que não o aproximem da ameaça. Parecia mais sensata, mas as tocas deixaram de proteger contra as raposas: a 1000 dias, os coelhos chegavam a 4 e era precisa migração. Um coelho a sério também corre para a toca mesmo passando perto do perigo. Voltou a regra antiga, e o teste passou a contar só os animais à vista.
+3. **O medo tem um custo, também com o jogador.** Com o jogador parado durante dias, os coelhos à volta deixam de comer, ficam desesperados e acabam por comer ao lado dele. Nas primeiras 6 horas há 18 animais à vista perto dele, contra 53 sem jogador, e é isso que o jogador vê quando se aproxima. Um coelho que se habitua a um jogador quieto pode ser uma ideia para mais tarde.
+
+**Verificado por ti:** andar com as setas e com WASD funciona, e as raposas fogem quando te aproximas. Os coelhos ficam quase sempre a umas células de distância, o que bate certo: veem até 3 células e afastam-se antes de chegares perto. As diagonais (duas teclas ao mesmo tempo) ficaram verificadas com um teste do jogo, `as_teclas_mexem_o_jogador`, que carrega as teclas sem janela.
+
+**Decisão em aberto:** na diagonal o jogador anda duas células por passo, mais depressa do que os animais (que só andam em 4 direções). Por agora fica assim.
+
+**Próximo passo:** o resto da etapa 4 está feito (terreno, animais, simulação ligada ao desenho). A seguir: commit e decidir a etapa 5 ou o cheiro humano (o jogador deixar rasto).
+
 ---
 
 ## 2026-11-01 (domingo)

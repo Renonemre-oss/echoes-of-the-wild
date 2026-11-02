@@ -4,6 +4,8 @@
 //! em vez de caçar, porque comer restos não custa nada. Senão, se vê um coelho,
 //! persegue-o; se não vê nenhum, usa o nariz (restos, depois coelhos, GDD 7.6);
 //! se não sente nada, deambula.
+//! Evita o jogador: se ele estiver perto, afasta-se, mesmo com fome (GDD 3.1:
+//! o jogador pode afugentar um predador).
 //! Os mecanismos de equilíbrio da GDD 7.8 estão aqui:
 //! - depois de comer fica saciada e não caça durante algum tempo;
 //! - os coelhos dentro de uma toca estão a salvo, e a vegetação densa esconde os
@@ -14,7 +16,7 @@
 use crate::rabbit::Rabbit;
 use crate::rng::Rng;
 use crate::scent::{sniff, Scent};
-use crate::world::{distance, step_toward, World};
+use crate::world::{distance, step_away, step_toward, World};
 
 #[derive(Clone, Debug)]
 pub struct FoxParams {
@@ -37,6 +39,8 @@ pub struct FoxParams {
     pub move_cost: f32,
     /// Até quantas células de distância vê um coelho.
     pub vision: usize,
+    /// A esta distância do jogador, ou menos, a raposa afasta-se dele.
+    pub human_fear: usize,
     /// O cheiro mais fraco que a raposa sente, de comida e de coelho
     /// (GDD 7.6: olfato alto).
     pub food_smell_min: f32,
@@ -98,6 +102,7 @@ impl Default for FoxParams {
             metabolism: 0.35,
             move_cost: 0.15,
             vision: 5,
+            human_fear: 4,
             food_smell_min: 0.5,
             prey_smell_min: 0.0,
             scavenge_smell_min: 8.0,
@@ -154,7 +159,8 @@ impl Fox {
 
     /// Um tick de vida. Pode comer restos, caçar um coelho (marca-o como `eaten`)
     /// e ter uma cria.
-    /// `rivals` é quantas outras raposas estão a `territory_radius` ou menos.
+    /// `rivals` é quantas outras raposas estão a `territory_radius` ou menos;
+    /// `player` é a posição do jogador, se estiver no mapa.
     pub fn act(
         &mut self,
         rabbits: &mut [Rabbit],
@@ -162,6 +168,7 @@ impl Fox {
         rng: &mut Rng,
         p: &FoxParams,
         rivals: usize,
+        player: Option<(usize, usize)>,
     ) -> FoxTick {
         let mut result = FoxTick::default();
         self.age += 1;
@@ -170,7 +177,12 @@ impl Fox {
         self.energy -= p.metabolism;
 
         let hungry = self.satiety == 0 && self.energy < p.hunt_below;
-        if self.energy < p.full_energy && world.scraps_at(self.x, self.y) > 0.0 {
+        let me = (self.x, self.y);
+        if let Some(human) = player.filter(|&h| distance(h, me) <= p.human_fear) {
+            // O jogador está perto: afasta-se, e hoje não há caça nem restos.
+            (self.x, self.y) = step_away(world, rng, me, human);
+            self.energy -= p.move_cost;
+        } else if self.energy < p.full_energy && world.scraps_at(self.x, self.y) > 0.0 {
             // Restos de comida mesmo aqui: come até estar cheia.
             let eaten = world.take_scraps(self.x, self.y, p.scrap_bite);
             self.energy = (self.energy + eaten * p.energy_per_scrap).min(p.energy_max);
@@ -307,7 +319,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut fox = Fox::newborn(5, 5, 50.0);
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
-        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0);
+        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(tick.caught);
         assert!(rabbits[0].eaten);
         assert!(fox.energy > 50.0);
@@ -321,7 +333,7 @@ mod tests {
         let mut fox = Fox::newborn(5, 5, 50.0);
         fox.satiety = 10;
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
-        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0);
+        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(!tick.caught);
         assert!(!rabbits[0].eaten);
     }
@@ -332,7 +344,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut fox = Fox::newborn(2, 2, 50.0);
         let mut rabbits = vec![Rabbit::newborn(2, 6, 50.0)];
-        fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0);
+        fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         // Estava a 4 células e anda 2 por tick quando persegue.
         assert_eq!(distance((fox.x, fox.y), (2, 6)), 2);
     }
@@ -348,14 +360,14 @@ mod tests {
             f.satiety = 5; // saciada: não se distrai a caçar
             f
         };
-        let sozinha = adulta().act(&mut [], &mut world, &mut rng, &p, 0);
-        let com_rival = adulta().act(&mut [], &mut world, &mut rng, &p, 1);
+        let sozinha = adulta().act(&mut [], &mut world, &mut rng, &p, 0, None);
+        let com_rival = adulta().act(&mut [], &mut world, &mut rng, &p, 1, None);
         assert!(sozinha.baby.is_some());
         assert!(com_rival.baby.is_none());
         // Com restos que cheguem para duas raposas a mais, duas rivais já não travam.
         world.add_scraps(5, 8, 2.0 * p.scrap_energy_per_extra_fox / p.energy_per_scrap);
-        let com_comida = adulta().act(&mut [], &mut world, &mut rng, &p, 2);
-        let demasiadas = adulta().act(&mut [], &mut world, &mut rng, &p, 3);
+        let com_comida = adulta().act(&mut [], &mut world, &mut rng, &p, 2, None);
+        let demasiadas = adulta().act(&mut [], &mut world, &mut rng, &p, 3, None);
         assert!(com_comida.baby.is_some());
         assert!(demasiadas.baby.is_none());
     }
@@ -366,7 +378,7 @@ mod tests {
         world.add_scraps(5, 5, 5.0);
         let mut rng = Rng::new(1);
         let mut fox = Fox::newborn(5, 5, 40.0);
-        fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0);
+        fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
         assert!(fox.energy > 40.0);
         assert!(world.scraps_at(5, 5) < 5.0);
         assert_eq!((fox.x, fox.y), (5, 5)); // ficou a comer
@@ -382,7 +394,7 @@ mod tests {
         let p = FoxParams::default();
         let mut fox = Fox::newborn(5, 5, p.hunt_below + 1.0);
         for _ in 0..200 {
-            fox.act(&mut [], &mut world, &mut rng, &p, 0);
+            fox.act(&mut [], &mut world, &mut rng, &p, 0, None);
         }
         assert!(fox.energy >= p.repro_threshold, "ficou em {}", fox.energy);
     }
@@ -395,8 +407,21 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut fox = Fox::newborn(4, 5, 40.0);
         let mut rabbits = vec![Rabbit::newborn(8, 5, 50.0)];
-        fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0);
+        fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert_eq!((fox.x, fox.y), (3, 5));
+    }
+
+    #[test]
+    fn raposa_foge_do_jogador_mesmo_com_fome() {
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        let mut fox = Fox::newborn(5, 5, 30.0);
+        // Um coelho ao lado, mas o jogador também está perto.
+        let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
+        let jogador = (5, 3);
+        fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, Some(jogador));
+        assert!(!rabbits[0].eaten);
+        assert_eq!(distance((fox.x, fox.y), jogador), 3);
     }
 
     #[test]
@@ -406,7 +431,7 @@ mod tests {
         let mut rng = Rng::new(1);
         let mut fox = Fox::newborn(5, 5, 50.0);
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
-        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0);
+        let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(!tick.caught);
         assert!(!rabbits[0].eaten);
     }
@@ -422,13 +447,13 @@ mod tests {
         for _ in 0..1000 {
             let mut fox = Fox::newborn(0, 0, 50.0);
             let mut exposto = vec![Rabbit::newborn(0, 1, 50.0)];
-            if fox.act(&mut exposto, &mut world, &mut rng, &p, 0).caught {
+            if fox.act(&mut exposto, &mut world, &mut rng, &p, 0, None).caught {
                 apanhados_expostos += 1;
             }
             // Célula (6, 7) começa com bastante vegetação (entre 40% e 100%).
             let mut fox = Fox::newborn(6, 6, 50.0);
             let mut escondido = vec![Rabbit::newborn(6, 7, 50.0)];
-            if fox.act(&mut escondido, &mut world, &mut rng, &p, 0).caught {
+            if fox.act(&mut escondido, &mut world, &mut rng, &p, 0, None).caught {
                 apanhados_escondidos += 1;
             }
         }

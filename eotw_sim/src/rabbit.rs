@@ -101,14 +101,15 @@ impl Rabbit {
         }
     }
 
-    /// Um tick de vida. `foxes` são as posições das raposas.
+    /// Um tick de vida. `threats` são as posições do que o coelho teme: as
+    /// raposas e, se estiver no mapa, o jogador.
     /// Devolve uma cria se o coelho se reproduziu neste tick.
     pub fn act(
         &mut self,
         world: &mut World,
         rng: &mut Rng,
         p: &RabbitParams,
-        foxes: &[(usize, usize)],
+        threats: &[(usize, usize)],
     ) -> Option<Rabbit> {
         self.age += 1;
         self.cooldown = self.cooldown.saturating_sub(1);
@@ -116,13 +117,17 @@ impl Rabbit {
 
         let me = (self.x, self.y);
         let threat = if self.energy > p.desperate_energy {
-            nearest_threat(foxes, me, p.vision)
+            nearest_threat(threats, me, p.vision)
         } else {
             None
         };
         if let Some(threat) = threat {
             // Fuga: ignora a fome. Dentro da toca fica quieto; senão corre para a
-            // toca mais próxima ou, se não houver nenhuma perto, para longe da raposa.
+            // toca mais próxima ou, se não houver nenhuma perto, para longe da ameaça.
+            // Corre para a toca mesmo que ela fique do lado da ameaça, como um
+            // coelho a sério. Experimentei só aceitar tocas que não o aproximassem
+            // da ameaça, mas as tocas deixaram de proteger e, a 1000 dias, os
+            // coelhos chegavam a 4 (ver DIARIO.md).
             if !world.is_burrow(self.x, self.y) {
                 (self.x, self.y) = match world.nearest_burrow(me, p.vision) {
                     Some(burrow) => step_toward(world, rng, me, burrow),
@@ -172,13 +177,13 @@ impl Rabbit {
     }
 }
 
-/// A raposa mais próxima que o coelho consegue ver, se houver alguma.
+/// A ameaça mais próxima que o coelho consegue ver, se houver alguma.
 fn nearest_threat(
-    foxes: &[(usize, usize)],
+    threats: &[(usize, usize)],
     me: (usize, usize),
     vision: usize,
 ) -> Option<(usize, usize)> {
-    foxes
+    threats
         .iter()
         .copied()
         .filter(|&f| distance(f, me) <= vision)

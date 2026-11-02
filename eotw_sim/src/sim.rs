@@ -264,6 +264,9 @@ pub struct Simulation {
     pub world: World,
     pub rabbits: Vec<Rabbit>,
     pub foxes: Vec<Fox>,
+    /// Onde está o jogador, se estiver no mapa. Os coelhos e as raposas
+    /// afastam-se dele. Sem jogador, a simulação é igual à de antes.
+    pub player: Option<(usize, usize)>,
     tick: u64,
     today: DayCounters,
     pub stats: Vec<DayStats>,
@@ -314,6 +317,7 @@ impl Simulation {
             world,
             rabbits,
             foxes: Vec::new(),
+            player: None,
             tick: 0,
             today: DayCounters::default(),
             stats: Vec::new(),
@@ -348,6 +352,21 @@ impl Simulation {
         let mut sim = Self::new(config);
         sim.run_days(days);
         sim
+    }
+
+    /// Põe o jogador numa célula (ou tira-o do mapa, com `None`).
+    pub fn place_player(&mut self, cell: Option<(usize, usize)>) {
+        self.player = cell.map(|(x, y)| (x.min(self.world.width - 1), y.min(self.world.height - 1)));
+    }
+
+    /// Anda uma célula na direção (dx, dy), sem sair do mapa. Não gasta
+    /// tempo de jogo: o jogador mexe-se em tempo real, mesmo em pausa.
+    pub fn move_player(&mut self, dx: i32, dy: i32) {
+        if let Some((x, y)) = self.player {
+            let nx = (x as i32 + dx).clamp(0, self.world.width as i32 - 1) as usize;
+            let ny = (y as i32 + dy).clamp(0, self.world.height as i32 - 1) as usize;
+            self.player = Some((nx, ny));
+        }
     }
 
     /// As raposas iniciais chegam, em células ao acaso.
@@ -430,8 +449,14 @@ impl Simulation {
                 .count();
             let was_in = in_cabin(fox.x, fox.y);
             let scraps = cabin.as_ref().map_or(0.0, |c| self.world.scraps_at(c.x, c.y));
-            let result =
-                fox.act(&mut self.rabbits, &mut self.world, &mut self.rng, &self.config.fox, rivals);
+            let result = fox.act(
+                &mut self.rabbits,
+                &mut self.world,
+                &mut self.rng,
+                &self.config.fox,
+                rivals,
+                self.player,
+            );
             if result.caught {
                 hunts += 1;
             }
@@ -470,7 +495,9 @@ impl Simulation {
 
         // Depois os coelhos, pela ordem em que estão na lista (determinístico).
         // Veem onde as raposas estão agora e fogem se alguma estiver perto.
-        let fox_positions: Vec<(usize, usize)> = self.foxes.iter().map(|f| (f.x, f.y)).collect();
+        // O jogador também conta como ameaça para os coelhos.
+        let threats: Vec<(usize, usize)> =
+            self.foxes.iter().map(|f| (f.x, f.y)).chain(self.player).collect();
         let mut newborns = Vec::new();
         for rabbit in self.rabbits.iter_mut() {
             if rabbit.eaten {
@@ -479,7 +506,7 @@ impl Simulation {
             let was_in = in_cabin(rabbit.x, rabbit.y);
             let scraps = cabin.as_ref().map_or(0.0, |c| self.world.scraps_at(c.x, c.y));
             if let Some(baby) =
-                rabbit.act(&mut self.world, &mut self.rng, &self.config.rabbit, &fox_positions)
+                rabbit.act(&mut self.world, &mut self.rng, &self.config.rabbit, &threats)
             {
                 newborns.push(baby);
             }
@@ -972,6 +999,61 @@ mod tests {
             let n = sim.rabbits.len();
             assert!(n > 150, "seed {seed}: só {n} coelhos com muita comida");
         }
+    }
+
+    /// Animais à vista (coelhos fora da toca e raposas) a `raio` células ou
+    /// menos de `centro`. Um coelho escondido numa toca ao lado do jogador
+    /// não conta: o jogador não o vê.
+    fn animais_perto(sim: &Simulation, centro: (usize, usize), raio: usize) -> usize {
+        let coelhos = sim.rabbits.iter().filter(|r| {
+            distance((r.x, r.y), centro) <= raio && !sim.world.is_burrow(r.x, r.y)
+        });
+        let raposas = sim.foxes.iter().filter(|f| distance((f.x, f.y), centro) <= raio);
+        coelhos.count() + raposas.count()
+    }
+
+    /// GDD 4: o jogador é uma presença no ecossistema. Quando chega, os
+    /// animais à volta dele fogem ou escondem-se.
+    ///
+    /// Mede as primeiras 6 horas, que é o que o jogador vê ao aproximar-se. Com
+    /// o jogador parado durante dias, o efeito esbate-se: os coelhos que fogem
+    /// não comem, ficam desesperados (`desperate_energy`) e acabam por ir comer
+    /// mesmo ao lado dele. É o mesmo custo do medo que já existe com as raposas.
+    #[test]
+    fn o_jogador_afasta_os_animais() {
+        let centro = (12, 12);
+        let (mut com, mut sem) = (0, 0);
+        for seed in 1..=10 {
+            let config = Config {
+                seed,
+                ..Config::default()
+            };
+            let mut a = Simulation::warmed_up(config.clone());
+            let mut b = Simulation::warmed_up(config);
+            a.place_player(Some(centro));
+            for _ in 0..6 {
+                a.step();
+                b.step();
+            }
+            let (na, nb) = (animais_perto(&a, centro, 2), animais_perto(&b, centro, 2));
+            assert!(na <= nb, "seed {seed}: {na} animais à vista com jogador, {nb} sem");
+            com += na;
+            sem += nb;
+        }
+        assert!(com * 2 <= sem, "{com} animais à vista com jogador, {sem} sem");
+    }
+
+    #[test]
+    fn o_jogador_anda_sem_sair_do_mapa() {
+        let mut sim = Simulation::new(Config::default());
+        sim.move_player(1, 0);
+        assert_eq!(sim.player, None, "sem jogador no mapa, não há nada para mexer");
+        sim.place_player(Some((0, 0)));
+        sim.move_player(-1, -1);
+        assert_eq!(sim.player, Some((0, 0)));
+        sim.move_player(1, 0);
+        sim.move_player(0, 1);
+        assert_eq!(sim.player, Some((1, 1)));
     }
 
     #[test]

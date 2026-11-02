@@ -19,6 +19,9 @@ const CELL: f32 = 26.0;
 /// Largura reservada ao painel de texto, à esquerda do mapa.
 const PANEL_WIDTH: f32 = 330.0;
 
+/// Tempo entre passos do jogador com a tecla carregada, em segundos.
+const PLAYER_STEP_SECS: f32 = 0.12;
+
 /// Ritmos possíveis, em horas de jogo por segundo real.
 const SPEEDS: [f32; 6] = [1.0, 4.0, 12.0, 24.0, 72.0, 240.0];
 
@@ -31,8 +34,12 @@ fn main() {
     if options.cabin {
         config.cabin = Some(CabinParams::centered(config.width, config.height, 10.0));
     }
-    // O jogador chega depois do aquecimento, a um mundo já em equilíbrio.
-    let sim = Simulation::warmed_up(config);
+    // O jogador chega depois do aquecimento, a um mundo já em equilíbrio,
+    // ao lado da cabana (ou ao centro, se não houver cabana).
+    let mut sim = Simulation::warmed_up(config);
+    let (w, h) = (sim.world.width, sim.world.height);
+    let start = sim.config().cabin.as_ref().map_or((w / 2, h / 2), |c| (c.x, c.y + 1));
+    sim.place_player(Some(start));
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -51,10 +58,11 @@ fn main() {
             pending: 0.0,
         })
         .insert_resource(options)
+        .insert_resource(Walk { cooldown: 0.0 })
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (controls, advance, draw_tiles, draw_animals, draw_panel, screenshot).chain(),
+            (controls, walk, advance, draw_tiles, draw_animals, draw_panel, screenshot).chain(),
         )
         .run();
 }
@@ -110,11 +118,18 @@ struct Clock {
     pending: f32,
 }
 
+/// O ritmo a que o jogador anda com uma tecla carregada.
+#[derive(Resource)]
+struct Walk {
+    /// Segundos até poder dar o próximo passo.
+    cooldown: f32,
+}
+
 /// Uma célula do mapa (o índice é `y * largura + x`).
 #[derive(Component)]
 struct Tile(usize);
 
-/// Um coelho ou uma raposa desenhado neste frame.
+/// Um coelho, uma raposa ou o jogador, desenhado neste frame.
 #[derive(Component)]
 struct AnimalSprite;
 
@@ -193,11 +208,47 @@ fn controls(keys: Res<ButtonInput<KeyCode>>, mut clock: ResMut<Clock>) {
     if keys.just_pressed(KeyCode::Space) {
         clock.paused = !clock.paused;
     }
-    if keys.any_just_pressed([KeyCode::Equal, KeyCode::NumpadAdd, KeyCode::ArrowUp]) {
+    if keys.any_just_pressed([KeyCode::Equal, KeyCode::NumpadAdd]) {
         clock.speed = (clock.speed + 1).min(SPEEDS.len() - 1);
     }
-    if keys.any_just_pressed([KeyCode::Minus, KeyCode::NumpadSubtract, KeyCode::ArrowDown]) {
+    if keys.any_just_pressed([KeyCode::Minus, KeyCode::NumpadSubtract]) {
         clock.speed = clock.speed.saturating_sub(1);
+    }
+}
+
+/// Move o jogador com as setas ou WASD: um passo logo que se carrega, e
+/// depois um passo a cada `PLAYER_STEP_SECS` enquanto a tecla estiver em baixo.
+/// Anda em tempo real, mesmo com o jogo em pausa.
+fn walk(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut walk: ResMut<Walk>,
+    mut world: ResMut<World>,
+) {
+    let held = |a, b| keys.pressed(a) || keys.pressed(b);
+    let pressed = |a, b| keys.just_pressed(a) || keys.just_pressed(b);
+    let dirs = [
+        (KeyCode::ArrowUp, KeyCode::KeyW, 0, -1),
+        (KeyCode::ArrowDown, KeyCode::KeyS, 0, 1),
+        (KeyCode::ArrowLeft, KeyCode::KeyA, -1, 0),
+        (KeyCode::ArrowRight, KeyCode::KeyD, 1, 0),
+    ];
+    let (mut dx, mut dy): (i32, i32) = (0, 0);
+    let mut fresh = false;
+    for (a, b, x, y) in dirs {
+        if held(a, b) {
+            dx += x;
+            dy += y;
+        }
+        fresh |= pressed(a, b);
+    }
+    walk.cooldown -= time.delta_secs();
+    if (dx, dy) == (0, 0) {
+        return;
+    }
+    if fresh || walk.cooldown <= 0.0 {
+        world.0.move_player(dx.signum(), dy.signum());
+        walk.cooldown = PLAYER_STEP_SECS;
     }
 }
 
@@ -253,6 +304,20 @@ fn draw_animals(
             AnimalSprite,
         ));
     }
+    if let Some((x, y)) = sim.player {
+        // O jogador: um quadrado azul com contorno claro, para se ver bem.
+        let pos = cell_to_screen(x, y, w, h);
+        commands.spawn((
+            Sprite::from_color(Color::srgb(0.95, 0.95, 1.0), Vec2::splat(CELL * 0.8)),
+            Transform::from_xyz(pos.x, pos.y, 4.0),
+            AnimalSprite,
+        ));
+        commands.spawn((
+            Sprite::from_color(Color::srgb(0.20, 0.45, 0.95), Vec2::splat(CELL * 0.62)),
+            Transform::from_xyz(pos.x, pos.y, 4.1),
+            AnimalSprite,
+        ));
+    }
 }
 
 fn draw_panel(world: Res<World>, clock: Res<Clock>, mut panel: Query<&mut Text, With<Panel>>) {
@@ -273,8 +338,8 @@ fn draw_panel(world: Res<World>, clock: Res<Clock>, mut panel: Query<&mut Text, 
         "Echoes of the Wild\n\n\
          Dia {}, {:02}h\n{state}, {} horas por segundo\n\n\
          Coelhos: {}\nRaposas: {}\nVegetação média: {:.1} de {:.0}\n\n\
-         Espaço: pausa\n+ e -: velocidade\n\n\
-         Legenda:\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
+         Setas ou WASD: andar\nEspaço: pausa\n+ e -: velocidade\n\n\
+         Legenda:\n  azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
@@ -319,6 +384,38 @@ mod tests {
         let muita = vegetation_color(0.9).to_srgba();
         assert!(muita.green > pouca.green);
         assert!(muita.red < pouca.red);
+    }
+
+    /// Corre o sistema `walk` uma vez com estas teclas carregadas e devolve
+    /// onde fica o jogador, que começa em (5, 5).
+    fn andar_com(teclas: &[KeyCode]) -> (usize, usize) {
+        let mut sim = Simulation::new(Config::default());
+        sim.place_player(Some((5, 5)));
+        let mut app = App::new();
+        let mut input = ButtonInput::<KeyCode>::default();
+        for &k in teclas {
+            input.press(k);
+        }
+        app.insert_resource(input)
+            .insert_resource(Time::<()>::default())
+            .insert_resource(Walk { cooldown: 0.0 })
+            .insert_resource(World(sim))
+            .add_systems(Update, walk);
+        app.update();
+        app.world().resource::<World>().0.player.unwrap()
+    }
+
+    #[test]
+    fn as_teclas_mexem_o_jogador() {
+        assert_eq!(andar_com(&[KeyCode::KeyW]), (5, 4));
+        assert_eq!(andar_com(&[KeyCode::ArrowDown]), (5, 6));
+        assert_eq!(andar_com(&[KeyCode::KeyA]), (4, 5));
+        assert_eq!(andar_com(&[KeyCode::ArrowRight]), (6, 5));
+        // Duas teclas ao mesmo tempo: diagonal.
+        assert_eq!(andar_com(&[KeyCode::KeyW, KeyCode::KeyA]), (4, 4));
+        assert_eq!(andar_com(&[KeyCode::ArrowDown, KeyCode::ArrowRight]), (6, 6));
+        // Teclas opostas anulam-se.
+        assert_eq!(andar_com(&[KeyCode::KeyW, KeyCode::KeyS]), (5, 5));
     }
 
     #[test]
