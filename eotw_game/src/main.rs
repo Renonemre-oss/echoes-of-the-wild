@@ -1,8 +1,12 @@
-//! O jogo: a simulação do `eotw_sim` desenhada numa janela com Bevy (etapa 4).
+//! O jogo: a paisagem do `eotw_sim` desenhada numa janela com Bevy.
 //!
 //! A simulação não sabe que o Bevy existe. Este programa só faz três coisas:
 //! avança a simulação ao ritmo escolhido, desenha o que ela calculou e lê o
 //! teclado. Toda a ecologia continua em `eotw_sim`.
+//!
+//! O mundo é uma paisagem de 5x5 regiões (120x120 células). A câmara segue
+//! o jogador e só se desenha o que está à volta dele, que está sempre dentro
+//! da janela simulada por inteiro (`Landscape`).
 //!
 //! Exemplos:
 //!   cargo run -p eotw_game
@@ -12,13 +16,25 @@
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use eotw_sim::{CabinParams, Config, Scent, Simulation, TICKS_PER_DAY};
+use eotw_sim::landscape::{Landscape, REGION};
+use eotw_sim::{CabinParams, Config, Scent, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
 
 /// Largura reservada ao painel de texto, à esquerda do mapa.
 const PANEL_WIDTH: f32 = 330.0;
+
+/// Regiões de lado na paisagem.
+const LANDSCAPE_REGIONS: usize = 5;
+
+/// Células desenhadas à volta do jogador, de lado a lado e de cima a baixo.
+/// Chegam para encher a parte da janela à direita do painel (630 x 720
+/// píxeis, 25 x 28 células) e ficam dentro da janela simulada, que vai pelo
+/// menos 24 células para cada lado do jogador.
+const VIEW_W: usize = 27;
+const VIEW_H: usize = 31;
+const _: () = assert!(VIEW_W / 2 <= REGION && VIEW_H / 2 <= REGION);
 
 /// Tempo entre passos do jogador com a tecla carregada, em segundos.
 const PLAYER_STEP_SECS: f32 = 0.12;
@@ -33,15 +49,14 @@ fn main() {
         seed: options.seed,
         ..Config::default()
     };
+    let side = LANDSCAPE_REGIONS * REGION;
     if options.cabin {
-        config.cabin = Some(CabinParams::centered(config.width, config.height, 10.0));
+        config.cabin = Some(CabinParams::centered(side, side, 10.0));
     }
     // O jogador chega depois do aquecimento, a um mundo já em equilíbrio,
     // ao lado da cabana (ou ao centro, se não houver cabana).
-    let mut sim = Simulation::warmed_up(config);
-    let (w, h) = (sim.world.width, sim.world.height);
-    let start = sim.config().cabin.as_ref().map_or((w / 2, h / 2), |c| (c.x, c.y + 1));
-    sim.place_player(Some(start));
+    let start = config.cabin.as_ref().map_or((side / 2, side / 2), |c| (c.x, c.y + 1));
+    let land = Landscape::new(config, LANDSCAPE_REGIONS, LANDSCAPE_REGIONS, start);
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -53,7 +68,7 @@ fn main() {
             ..default()
         }))
         .insert_resource(ClearColor(Color::srgb(0.10, 0.11, 0.10)))
-        .insert_resource(World(sim))
+        .insert_resource(World(land))
         .insert_resource(Clock {
             speed: 3,
             paused: false,
@@ -65,7 +80,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (controls, walk, advance, draw_tiles, draw_animals, draw_panel, screenshot).chain(),
+            (controls, walk, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot).chain(),
         )
         .run();
 }
@@ -111,9 +126,9 @@ impl Options {
     }
 }
 
-/// A simulação, guardada como recurso do Bevy.
+/// A paisagem, guardada como recurso do Bevy.
 #[derive(Resource)]
-struct World(Simulation);
+struct World(Landscape);
 
 /// O ritmo do tempo de jogo.
 #[derive(Resource)]
@@ -137,7 +152,8 @@ struct Walk {
 #[derive(Resource)]
 struct SmellView(bool);
 
-/// Uma célula do mapa (o índice é `y * largura + x`).
+/// Um dos quadrados desenhados à volta do jogador. O índice diz a posição
+/// em relação a ele: coluna `i % VIEW_W` e linha `i / VIEW_W` da vista.
 #[derive(Component)]
 struct Tile(usize);
 
@@ -149,12 +165,32 @@ struct AnimalSprite;
 #[derive(Component)]
 struct Panel;
 
-/// O centro de uma célula no ecrã. A linha 0 do mapa fica em cima.
-fn cell_to_screen(x: usize, y: usize, width: usize, height: usize) -> Vec2 {
-    Vec2::new(
-        (x as f32 + 0.5 - width as f32 / 2.0) * CELL,
-        (height as f32 / 2.0 - y as f32 - 0.5) * CELL,
+/// O centro de uma célula da paisagem no ecrã. A linha 0 fica em cima, e
+/// a câmara é que se mexe para seguir o jogador.
+fn cell_to_screen(x: i64, y: i64) -> Vec2 {
+    Vec2::new((x as f32 + 0.5) * CELL, -(y as f32 + 0.5) * CELL)
+}
+
+/// A célula da paisagem por baixo do quadrado `i` da vista, com o jogador ao centro.
+fn tile_cell(i: usize, player: (usize, usize)) -> (i64, i64) {
+    (
+        player.0 as i64 + (i % VIEW_W) as i64 - (VIEW_W / 2) as i64,
+        player.1 as i64 + (i / VIEW_W) as i64 - (VIEW_H / 2) as i64,
     )
+}
+
+/// A célula está à vista: a menos de meia vista do jogador.
+fn on_screen((x, y): (i64, i64), player: (usize, usize)) -> bool {
+    (x - player.0 as i64).unsigned_abs() as usize <= VIEW_W / 2
+        && (y - player.1 as i64).unsigned_abs() as usize <= VIEW_H / 2
+}
+
+/// Uma célula da paisagem em coordenadas da janela simulada, se estiver nela.
+fn in_window(land: &Landscape, (x, y): (i64, i64)) -> Option<(usize, usize)> {
+    if x < 0 || y < 0 {
+        return None;
+    }
+    land.in_window((x as usize, y as usize))
 }
 
 /// A cor da vegetação, de terra nua (castanho) a erva cheia (verde).
@@ -166,33 +202,16 @@ fn vegetation_color(ratio: f32) -> Color {
     Color::srgb(c.x, c.y, c.z)
 }
 
-fn setup(mut commands: Commands, world: Res<World>, assets: Res<AssetServer>) {
-    // A câmara desvia-se para a esquerda, para o mapa ficar à direita do painel.
-    commands.spawn((Camera2d, Transform::from_xyz(-PANEL_WIDTH / 2.0, 0.0, 0.0)));
-    let sim = &world.0;
-    let (w, h) = (sim.world.width, sim.world.height);
-    for y in 0..h {
-        for x in 0..w {
-            let pos = cell_to_screen(x, y, w, h);
-            // Um píxel de folga entre células desenha uma grelha discreta.
-            commands.spawn((
-                Sprite::from_color(Color::BLACK, Vec2::splat(CELL - 1.0)),
-                Transform::from_xyz(pos.x, pos.y, 0.0),
-                Tile(y * w + x),
-            ));
-            if sim.world.is_burrow(x, y) {
-                commands.spawn((
-                    Sprite::from_color(Color::srgb(0.20, 0.13, 0.08), Vec2::splat(CELL * 0.45)),
-                    Transform::from_xyz(pos.x, pos.y, 1.0),
-                ));
-            }
-        }
-    }
-    if let Some(c) = &sim.config().cabin {
-        let pos = cell_to_screen(c.x, c.y, w, h);
+fn setup(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.spawn(Camera2d);
+    // Os quadrados da vista: sempre os mesmos, e em cada frame mudam de
+    // sítio e de cor para mostrar o que está à volta do jogador.
+    for i in 0..VIEW_W * VIEW_H {
+        // Um píxel de folga entre células desenha uma grelha discreta.
         commands.spawn((
-            Sprite::from_color(Color::srgb(0.55, 0.38, 0.22), Vec2::splat(CELL * 0.9)),
-            Transform::from_xyz(pos.x, pos.y, 1.5),
+            Sprite::from_color(Color::BLACK, Vec2::splat(CELL - 1.0)),
+            Transform::default(),
+            Tile(i),
         ));
     }
     // A fonte do Bevy não tem acentos ("Vegetação" aparecia com quadrados).
@@ -285,10 +304,35 @@ fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>) 
     }
 }
 
-fn draw_tiles(world: Res<World>, smell: Res<SmellView>, mut tiles: Query<(&Tile, &mut Sprite)>) {
-    let w = &world.0.world;
-    for (tile, mut sprite) in &mut tiles {
-        let (x, y) = (tile.0 % w.width, tile.0 / w.width);
+/// A câmara segue o jogador. Fica desviada para a esquerda, para o jogador
+/// aparecer no meio da parte do ecrã à direita do painel.
+fn follow(world: Res<World>, mut camera: Query<&mut Transform, With<Camera2d>>) {
+    let (x, y) = world.0.player();
+    let at = cell_to_screen(x as i64, y as i64);
+    for mut t in &mut camera {
+        t.translation.x = at.x - PANEL_WIDTH / 2.0;
+        t.translation.y = at.y;
+    }
+}
+
+fn draw_tiles(
+    world: Res<World>,
+    smell: Res<SmellView>,
+    mut tiles: Query<(&Tile, &mut Sprite, &mut Transform, &mut Visibility)>,
+) {
+    let land = &world.0;
+    let w = &land.window_sim().world;
+    let player = land.player();
+    for (tile, mut sprite, mut transform, mut visible) in &mut tiles {
+        let cell = tile_cell(tile.0, player);
+        let pos = cell_to_screen(cell.0, cell.1);
+        transform.translation = pos.extend(0.0);
+        // Fora da paisagem não há nada para desenhar.
+        let Some((x, y)) = in_window(land, cell) else {
+            *visible = Visibility::Hidden;
+            continue;
+        };
+        *visible = Visibility::Visible;
         let mut color = vegetation_color(w.biomass_at(x, y) / w.capacity());
         if smell.0 {
             let human = w.scent.at(Scent::Human, x, y);
@@ -309,8 +353,8 @@ fn smell_tint(base: Color, human: f32, food: f32) -> Color {
     Color::srgb(rgb.x, rgb.y, rgb.z)
 }
 
-/// Apaga os animais do frame anterior e desenha os de agora. São poucas
-/// centenas, por isso não vale a pena complicar.
+/// Apaga o que se desenhou no frame anterior por cima dos quadrados
+/// (tocas, cabana, animais, jogador) e desenha o que está agora à vista.
 fn draw_animals(
     mut commands: Commands,
     world: Res<World>,
@@ -319,40 +363,39 @@ fn draw_animals(
     for e in &old {
         commands.entity(e).despawn();
     }
-    let sim = &world.0;
-    let (w, h) = (sim.world.width, sim.world.height);
+    let land = &world.0;
+    let sim = land.window_sim();
+    let (ox, oy) = land.window_origin();
+    let player = land.player();
+    let global = |x: usize, y: usize| ((ox + x) as i64, (oy + y) as i64);
+    let mut put = |cell: (i64, i64), offset: Vec2, color: Color, size: f32, z: f32| {
+        if on_screen(cell, player) {
+            let pos = cell_to_screen(cell.0, cell.1) + offset;
+            commands.spawn((
+                Sprite::from_color(color, Vec2::splat(size)),
+                Transform::from_xyz(pos.x, pos.y, z),
+                AnimalSprite,
+            ));
+        }
+    };
+    for &(x, y) in sim.world.burrows() {
+        put(global(x, y), Vec2::ZERO, Color::srgb(0.20, 0.13, 0.08), CELL * 0.45, 1.0);
+    }
+    if let Some(c) = land.cabin() {
+        put((c.x as i64, c.y as i64), Vec2::ZERO, Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5);
+    }
     for (i, r) in sim.rabbits.iter().enumerate() {
         // Vários coelhos na mesma célula ficam ligeiramente desencontrados.
         let jitter = Vec2::new((i % 3) as f32 - 1.0, ((i / 3) % 3) as f32 - 1.0) * CELL * 0.22;
-        let pos = cell_to_screen(r.x, r.y, w, h) + jitter;
-        commands.spawn((
-            Sprite::from_color(Color::srgb(0.93, 0.90, 0.82), Vec2::splat(CELL * 0.28)),
-            Transform::from_xyz(pos.x, pos.y, 2.0),
-            AnimalSprite,
-        ));
+        put(global(r.x, r.y), jitter, Color::srgb(0.93, 0.90, 0.82), CELL * 0.28, 2.0);
     }
     for f in &sim.foxes {
-        let pos = cell_to_screen(f.x, f.y, w, h);
-        commands.spawn((
-            Sprite::from_color(Color::srgb(0.90, 0.45, 0.12), Vec2::splat(CELL * 0.6)),
-            Transform::from_xyz(pos.x, pos.y, 3.0),
-            AnimalSprite,
-        ));
+        put(global(f.x, f.y), Vec2::ZERO, Color::srgb(0.90, 0.45, 0.12), CELL * 0.6, 3.0);
     }
-    if let Some((x, y)) = sim.player {
-        // O jogador: um quadrado azul com contorno claro, para se ver bem.
-        let pos = cell_to_screen(x, y, w, h);
-        commands.spawn((
-            Sprite::from_color(Color::srgb(0.95, 0.95, 1.0), Vec2::splat(CELL * 0.8)),
-            Transform::from_xyz(pos.x, pos.y, 4.0),
-            AnimalSprite,
-        ));
-        commands.spawn((
-            Sprite::from_color(Color::srgb(0.20, 0.45, 0.95), Vec2::splat(CELL * 0.62)),
-            Transform::from_xyz(pos.x, pos.y, 4.1),
-            AnimalSprite,
-        ));
-    }
+    // O jogador: um quadrado azul com contorno claro, para se ver bem.
+    let me = (player.0 as i64, player.1 as i64);
+    put(me, Vec2::ZERO, Color::srgb(0.95, 0.95, 1.0), CELL * 0.8, 4.0);
+    put(me, Vec2::ZERO, Color::srgb(0.20, 0.45, 0.95), CELL * 0.62, 4.1);
 }
 
 fn draw_panel(
@@ -361,31 +404,42 @@ fn draw_panel(
     smell: Res<SmellView>,
     mut panel: Query<&mut Text, With<Panel>>,
 ) {
-    let sim = &world.0;
+    let land = &world.0;
+    let sim = land.window_sim();
     let Ok(mut text) = panel.single_mut() else {
         return;
     };
     let state = if clock.paused { "em pausa" } else { "a correr" };
-    let cabin = if sim.config().cabin.is_some() {
+    let cabin = if land.cabin().is_some() {
         "\n  castanho claro: cabana"
     } else {
         ""
     };
+    let totals = land.totals();
     // As últimas linhas do registo da cabana, se houver cabana.
     let log = sim.cabin_log.lines.iter().rev().take(3).rev();
     let log: String = log.map(|l| format!("\n{l}")).collect();
     text.0 = format!(
         "Echoes of the Wild\n\n\
          Dia {}, {:02}h\n{state}, {} horas por segundo\n\n\
-         Coelhos: {}\nRaposas: {}\nVegetação média: {:.1} de {:.0}\n\n\
+         Região {}, {} (de {} x {})\n\
+         À volta (3x3 regiões): {} coelhos, {} raposas\n\
+         No mundo: {} coelhos, {} raposas\n\
+         Vegetação média à volta: {:.1} de {:.0}\n\n\
          Setas ou WASD: andar\nEspaço: pausa\n+ e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
         SPEEDS[clock.speed],
+        land.player().0 / REGION,
+        land.player().1 / REGION,
+        land.cols,
+        land.rows,
         sim.rabbits.len(),
         sim.foxes.len(),
+        totals.0,
+        totals.1,
         sim.world.mean_biomass(),
         sim.world.capacity(),
         if smell.0 { "ligado: azul é o teu rasto, amarelo a comida" } else { "desligado" },
@@ -418,6 +472,12 @@ fn screenshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eotw_sim::Simulation;
+
+    /// Uma paisagem pequena (1 região), para os testes serem rápidos.
+    fn paisagem(jogador: (usize, usize)) -> Landscape {
+        Landscape::new(Config::default(), 1, 1, jogador)
+    }
 
     #[test]
     fn mais_vegetacao_e_mais_verde() {
@@ -430,8 +490,6 @@ mod tests {
     /// Corre o sistema `walk` uma vez com estas teclas carregadas e devolve
     /// onde fica o jogador, que começa em (5, 5).
     fn andar_com(teclas: &[KeyCode]) -> (usize, usize) {
-        let mut sim = Simulation::new(Config::default());
-        sim.place_player(Some((5, 5)));
         let mut app = App::new();
         let mut input = ButtonInput::<KeyCode>::default();
         for &k in teclas {
@@ -440,10 +498,10 @@ mod tests {
         app.insert_resource(input)
             .insert_resource(Time::<()>::default())
             .insert_resource(Walk { cooldown: 0.0 })
-            .insert_resource(World(sim))
+            .insert_resource(World(paisagem((5, 5))))
             .add_systems(Update, walk);
         app.update();
-        app.world().resource::<World>().0.player.unwrap()
+        app.world().resource::<World>().0.player()
     }
 
     #[test]
@@ -505,10 +563,60 @@ mod tests {
 
     #[test]
     fn a_linha_zero_fica_em_cima() {
-        let topo = cell_to_screen(0, 0, 24, 24);
-        let fundo = cell_to_screen(0, 23, 24, 24);
-        assert!(topo.y > fundo.y);
-        // O mapa fica centrado na origem.
-        assert_eq!(cell_to_screen(0, 0, 24, 24).x, -cell_to_screen(23, 0, 24, 24).x);
+        assert!(cell_to_screen(0, 0).y > cell_to_screen(0, 23).y);
+        assert!(cell_to_screen(0, 0).x < cell_to_screen(1, 0).x);
+    }
+
+    /// O que se desenha à volta do jogador enche o ecrã.
+    #[test]
+    fn a_vista_enche_o_ecra() {
+        // (que a vista cabe na janela é verificado ao compilar, junto a `VIEW_W`)
+        // A vista enche a parte do ecrã à direita do painel (960 x 720).
+        assert!(VIEW_W as f32 * CELL >= 960.0 - PANEL_WIDTH);
+        assert!(VIEW_H as f32 * CELL >= 720.0);
+    }
+
+    /// A câmara fica em cima do jogador (desviada para o painel caber à
+    /// esquerda), também depois de ele andar.
+    #[test]
+    fn a_camara_segue_o_jogador() {
+        let mut app = App::new();
+        app.insert_resource(World(paisagem((5, 5)))).add_systems(Update, follow);
+        let camera = app.world_mut().spawn((Camera2d, Transform::default())).id();
+        for passo in 0..3 {
+            app.world_mut().resource_mut::<World>().0.move_player(1, 0);
+            app.update();
+            let t = app.world().get::<Transform>(camera).unwrap().translation;
+            let jogador = cell_to_screen(6 + passo, 5);
+            assert_eq!((t.x, t.y), (jogador.x - PANEL_WIDTH / 2.0, jogador.y));
+        }
+    }
+
+    /// Os quadrados mostram a vegetação da célula por baixo, com o jogador
+    /// ao centro, e escondem-se fora da paisagem.
+    #[test]
+    fn os_quadrados_mostram_o_mundo_a_volta() {
+        let mut app = App::new();
+        app.insert_resource(World(paisagem((2, 3))))
+            .insert_resource(SmellView(false))
+            .add_systems(Update, draw_tiles);
+        let centro = (VIEW_H / 2) * VIEW_W + VIEW_W / 2;
+        let canto = 0; // em cima à esquerda: fora da paisagem
+        let ids: Vec<Entity> = [centro, canto]
+            .into_iter()
+            .map(|i| {
+                app.world_mut()
+                    .spawn((Sprite::default(), Transform::default(), Visibility::default(), Tile(i)))
+                    .id()
+            })
+            .collect();
+        app.update();
+        let land = &app.world().resource::<World>().0;
+        let w = &land.window_sim().world;
+        let esperada = vegetation_color(w.biomass_at(2, 3) / w.capacity());
+        assert_eq!(app.world().get::<Sprite>(ids[0]).unwrap().color, esperada);
+        assert_eq!(app.world().get::<Transform>(ids[0]).unwrap().translation.truncate(), cell_to_screen(2, 3));
+        assert_eq!(*app.world().get::<Visibility>(ids[0]).unwrap(), Visibility::Visible);
+        assert_eq!(*app.world().get::<Visibility>(ids[1]).unwrap(), Visibility::Hidden);
     }
 }

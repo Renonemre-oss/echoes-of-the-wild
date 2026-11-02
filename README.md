@@ -9,7 +9,7 @@ O historial do que se vai construindo está em `DIARIO.md`.
 |---|---|
 | `eotw_sim` | A simulação (ecossistema, vegetação, coelhos, raposas). Sem dependência de motor gráfico. |
 | `eotw_cli` | Corre a simulação em modo texto e gera relatórios CSV. |
-| `eotw_game` | O jogo: desenha a simulação numa janela com Bevy 0.16. Não tem ecologia própria. |
+| `eotw_game` | O jogo: desenha a paisagem (5x5 regiões de 24x24) numa janela com Bevy 0.16, com a câmara a seguir o jogador. Não tem ecologia própria. |
 
 ## Como correr
 

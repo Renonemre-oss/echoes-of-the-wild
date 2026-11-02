@@ -23,7 +23,7 @@ use crate::rabbit::Rabbit;
 use crate::region::{AggregateParams, AggregateRegion};
 use crate::rng::Rng;
 use crate::scent::KINDS;
-use crate::sim::{Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
+use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
 use crate::world::{distance, World};
 
 /// O lado de uma região, em células.
@@ -78,6 +78,9 @@ pub struct Landscape {
     window: Window,
     /// O jogador, em células da paisagem inteira.
     player: (usize, usize),
+    /// A cabana, em células da paisagem inteira. Só existe na simulação
+    /// quando a sua região está na janela.
+    cabin: Option<CabinParams>,
     rng: Rng,
     /// Acontecimentos das simulações completas que já foram desfeitas,
     /// para não se perderem quando a janela se desloca.
@@ -90,7 +93,9 @@ impl Landscape {
     /// Uma paisagem de `cols` x `rows` regiões, com o jogador em `player`.
     /// Cada região começa como um mundo de 24x24 aquecido, com a sua própria
     /// seed, e é logo agregada; depois expande-se a janela à volta do jogador.
+    /// Uma cabana em `config.cabin` fica nessas células da paisagem inteira.
     pub fn new(config: Config, cols: usize, rows: usize, player: (usize, usize)) -> Self {
+        let cabin = config.cabin.clone();
         let config = Config {
             width: REGION,
             height: REGION,
@@ -133,6 +138,7 @@ impl Landscape {
             regions,
             window: empty,
             player,
+            cabin,
             rng,
             events: Vec::new(),
             crossings: 0,
@@ -153,6 +159,19 @@ impl Landscape {
 
     pub fn player(&self) -> (usize, usize) {
         self.player
+    }
+
+    /// A cabana, em células da paisagem inteira, se houver.
+    pub fn cabin(&self) -> Option<&CabinParams> {
+        self.cabin.as_ref()
+    }
+
+    /// Uma célula da paisagem em coordenadas da janela, se estiver nela.
+    pub fn in_window(&self, (x, y): (usize, usize)) -> Option<(usize, usize)> {
+        let (ox, oy) = self.window_origin();
+        let (w, h) = (self.window.cols * REGION, self.window.rows * REGION);
+        let (lx, ly) = (x.wrapping_sub(ox), y.wrapping_sub(oy));
+        (lx < w && ly < h).then_some((lx, ly))
     }
 
     pub fn day(&self) -> u64 {
@@ -248,6 +267,13 @@ impl Landscape {
         let day = self.window.sim.day().max(self.any_region_day());
         let tick = self.window.sim.tick().max(day * TICKS_PER_DAY);
         self.events.append(&mut self.window.sim.events);
+        // O registo da cabana e os restos que lá estão continuam na janela nova.
+        let cabin_log = std::mem::take(&mut self.window.sim.cabin_log);
+        let scraps = self
+            .cabin
+            .as_ref()
+            .and_then(|c| self.in_window((c.x, c.y)))
+            .map(|(x, y)| self.window.sim.world.scraps_at(x, y));
 
         // 1. As regiões da janela antiga: as que ficam guardam-se como
         //    estão; as que saem são agregadas.
@@ -276,9 +302,14 @@ impl Landscape {
 
         // 2. Junta a janela nova, região a região.
         let (w, h) = (cols * REGION, rows * REGION);
+        let cabin = self.cabin.as_ref().and_then(|c| {
+            let (lx, ly) = (c.x.wrapping_sub(rx * REGION), c.y.wrapping_sub(ry * REGION));
+            (lx < w && ly < h).then(|| CabinParams { x: lx, y: ly, ..c.clone() })
+        });
         let window_config = Config {
             width: w,
             height: h,
+            cabin: cabin.clone(),
             ..self.config.clone()
         };
         let mut rng = Rng::derived(&[self.config.seed, tick, STREAM_WINDOW]);
@@ -331,7 +362,13 @@ impl Landscape {
         for ((x, y), v) in scent {
             world.scent.set_cell(x, y, v);
         }
-        let sim = Simulation::from_parts(window_config, rng, world, rabbits, foxes, tick);
+        let mut sim = Simulation::from_parts(window_config, rng, world, rabbits, foxes, tick);
+        sim.cabin_log = cabin_log;
+        if let (Some(c), Some(left)) = (&cabin, scraps) {
+            // `from_parts` repõe a comida do dia; ficam os restos que havia.
+            sim.world.take_scraps(c.x, c.y, f32::MAX);
+            sim.world.add_scraps(c.x, c.y, left);
+        }
         self.window = Window { rx, ry, cols, rows, sim };
         self.place_player_in_window();
     }
@@ -685,6 +722,41 @@ mod tests {
             assert!((240.0..330.0).contains(&r), "{onde}: {r:.0} coelhos por região");
             assert!((3.0..12.0).contains(&f), "{onde}: {f:.1} raposas por região");
         }
+    }
+
+    /// A cabana fica no mesmo sítio da paisagem quando a janela se desloca,
+    /// com os restos e o registo que tinha, e só existe na simulação quando
+    /// a sua região está na janela.
+    #[test]
+    fn a_cabana_fica_no_sitio() {
+        let cabana = CabinParams::centered(3 * REGION, 3 * REGION, 10.0);
+        let mut l = Landscape::new(
+            Config {
+                seed: 5,
+                cabin: Some(cabana.clone()),
+                ..Config::default()
+            },
+            3,
+            3,
+            (cabana.x, cabana.y + 1),
+        );
+        let onde = |l: &Landscape| {
+            let c = l.window_sim().config().cabin.as_ref().map(|c| (c.x, c.y));
+            c.map(|(x, y)| (l.window_origin().0 + x, l.window_origin().1 + y))
+        };
+        assert_eq!(onde(&l), Some((cabana.x, cabana.y)));
+        l.run_days(3);
+        let (lx, ly) = l.in_window((cabana.x, cabana.y)).unwrap();
+        let restos = l.window_sim().world.scraps_at(lx, ly);
+        let linhas = l.window_sim().cabin_log.lines.len();
+        // Um passo para a região de cima: a da cabana continua na janela.
+        for _ in 0..REGION / 2 + 2 {
+            l.move_player(0, -1);
+        }
+        assert_eq!(onde(&l), Some((cabana.x, cabana.y)));
+        let (lx, ly) = l.in_window((cabana.x, cabana.y)).unwrap();
+        assert_eq!(l.window_sim().world.scraps_at(lx, ly), restos);
+        assert_eq!(l.window_sim().cabin_log.lines.len(), linhas);
     }
 
     /// Uma região que fica vazia volta a ter coelhos e raposas, vindos das

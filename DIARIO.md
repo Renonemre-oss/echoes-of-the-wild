@@ -519,7 +519,32 @@ Uma região esvaziada de propósito volta a ter 100 coelhos em 5 ou 6 dias e a p
 - **O cheiro das regiões que entram começa a zero.**
 - **O jogo ainda usa um mapa só.** A câmara que segue o jogador na paisagem é o passo 4.
 
-**Próximo passo:** níveis de detalhe, passo 4: o jogo passa a usar a paisagem, com uma câmara que segue o jogador.
+**Próximo passo:** níveis de detalhe, passo 4.
+
+
+### Níveis de detalhe, passo 4: o jogo anda pela paisagem 🎥
+
+**O que foi feito**
+
+- **O jogo corre a paisagem:** são 5x5 regiões, 120x120 células, em vez do mapa de 24x24.
+  - **No ecrã:** a câmara segue o jogador, e só se desenham as células à volta dele (27 x 31).
+  - **Sempre simulado por inteiro:** essas células estão sempre dentro da janela simulada por inteiro, que vai pelo menos uma região para cada lado do jogador. O compilador verifica isto (`const _: () = assert!(...)`).
+- **Os quadrados do chão são sempre os mesmos 837:** em cada frame mudam de sítio e de cor. Os animais e as tocas só se desenham se estiverem à vista. Antes desenhava-se o mapa inteiro, o que com 120x120 células e milhares de coelhos já não dava.
+- **O painel mostra também:**
+  - a região onde o jogador está;
+  - os coelhos e as raposas à volta, nas 3x3 regiões;
+  - os do mundo inteiro.
+- **A cabana entrou na paisagem:** fica no centro do mundo. Quando a janela se desloca, a cabana guarda os restos e o registo. Só existe na simulação quando a sua região está na janela. Teste `a_cabana_fica_no_sitio`.
+- **Testes novos do jogo:**
+  - `a_camara_segue_o_jogador`;
+  - `os_quadrados_mostram_o_mundo_a_volta`;
+  - `a_vista_enche_o_ecra`.
+
+![A janela com a paisagem](docs/janela_paisagem.png)
+
+**O que se aprendeu:** cada nível de detalhe só funciona se a fronteira onde muda ficar longe de quem olha. A janela simulada vai 24 células para cada lado do jogador, e a vista só 13 a 15. Por isso o que o jogador vê é sempre simulado animal a animal, e o resto do mundo é agregado sem ele dar por isso.
+
+**Próximo passo:** ver no teu computador se a paisagem corre bem, a andar de região em região, e depois escolher o próximo passo do protótipo.
 
 ---
 
