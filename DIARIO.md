@@ -477,7 +477,49 @@ Na conversão não há choque: 303 coelhos, e 5 dias depois 307.
 1. **Onde se põem os animais também é estado.** Com as raposas espalhadas ao acaso, a população de raposas subia 40%: 44 crias nos primeiros 25 dias, contra 10 na completa. A energia estava certa. O que falhava era a posição: na completa as raposas andam juntas, porque sobem os mesmos gradientes de cheiro, e o travão de densidade trava-as. Espalhadas, as que ficavam sozinhas tinham crias logo. Agora cada raposa nova é posta perto de outra, e ficam 5 crias contra 10.
 2. **Comparar com o jogador nos dois lados.** A primeira comparação tinha o jogador só na expandida, e ele também mexe nos animais.
 
-**Próximo passo:** níveis de detalhe, passo 3: um mundo com várias regiões, umas completas e outras agregadas, com animais a passar de umas para as outras.
+**Próximo passo:** níveis de detalhe, passo 3.
+
+
+### Níveis de detalhe, passo 3: uma paisagem com várias regiões 🗺️
+
+**O que foi feito**
+
+- **`landscape.rs`, a paisagem:** um mundo feito de regiões de 24x24 (GDD 7.4 e 7.9).
+  - **A janela:** à volta do jogador há 3x3 regiões simuladas por inteiro, numa só `Simulation` de 72x72. Os animais passam de uma região para a outra lá dentro sem costuras.
+  - **O resto do mundo:** as outras regiões são agregadas.
+- **A janela desloca-se com o jogador:** quando ele muda de região, as regiões que saem são agregadas e as que entram são expandidas. As que ficam guardam cada animal tal como estava, e também a vegetação e o cheiro. O jogador está sempre na região do meio, por isso a margem da janela fica a 24 células ou mais dele. Deslocar a janela demora 0,6 ms.
+- **Passagem entre regiões:** uma vez por dia, alguns animais passam para as regiões vizinhas.
+  - **A taxa:** foi medida num mapa de 48x48. Contei só quem, ao fim do dia, está noutra região do que no início, e as idas e voltas na fronteira não contam. Por cada fronteira, passam 2,3% dos coelhos e 0,29% das raposas por dia.
+  - **Entre a janela e as agregadas:** os animais saem e entram numa faixa de 4 células junto à fronteira, sempre longe do jogador.
+- **Testes novos:**
+  - `a_janela_desloca_sem_perder_animais`;
+  - `nada_aparece_nem_desaparece_perto_do_jogador`;
+  - `a_mesma_seed_da_a_mesma_paisagem`;
+  - `a_paisagem_fica_em_equilibrio`;
+  - `uma_regiao_vazia_e_recolonizada`.
+
+**Resultado** (3x3 regiões com o jogador num canto, 5 seeds, dias 100 a 300):
+
+| Por região | Coelhos | Raposas |
+|---|---|---|
+| na janela | 277 | 8,5 |
+| agregadas | 281 | 6,5 |
+
+Uma região esvaziada de propósito volta a ter 100 coelhos em 5 ou 6 dias e a primeira raposa entre o dia 36 e o dia 78. A paisagem inteira custa cerca de 160 µs por tick.
+
+**O que se aprendeu**
+
+1. **Uma janela completa em vez de regiões completas lado a lado.** Com várias simulações separadas, os animais teriam de saltar de um mapa para o outro, e um coelho junto à fronteira não veria a raposa do outro lado. Numa janela, isso acontece sozinho. As fronteiras onde se troca de nível de detalhe ficam todas longe do jogador.
+2. **Medir a passagem a sério.** Contando cada vez que um animal pisa a fronteira, os coelhos davam 6,2% por dia, porque contavam as idas e voltas. Contando onde estão ao fim do dia, 4,6%. As raposas mudam pouco de região (0,57%), porque passam muito tempo saciadas a descansar. Por isso uma região vazia recupera os coelhos numa semana e as raposas só em um ou dois meses.
+
+**O que ainda falta**
+
+- **Mais raposas na janela do que nas agregadas** (8,5 contra 6,5 por região). Uma simulação de 48x48 também tem 8,5 por região (ver a revisão), por isso vem do tamanho do mapa e não da janela. Os mapas maiores têm menos margens onde as raposas fiquem sozinhas.
+- **A janela desloca-se a cada vez que o jogador cruza uma fronteira.** Para a frente e para trás na mesma fronteira, as regiões longe dele são agregadas e expandidas de novo. Não se vê, mas perde-se o detalhe individual dessas regiões. Uma margem de tolerância resolve isto, se for preciso.
+- **O cheiro das regiões que entram começa a zero.**
+- **O jogo ainda usa um mapa só.** A câmara que segue o jogador na paisagem é o passo 4.
+
+**Próximo passo:** níveis de detalhe, passo 4: o jogo passa a usar a paisagem, com uma câmara que segue o jogador.
 
 ---
 

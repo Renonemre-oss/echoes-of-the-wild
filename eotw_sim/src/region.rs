@@ -80,6 +80,15 @@ pub struct AggregateParams {
     pub foxes_waiting: f32,
     /// Fração das raposas saciadas (`satiety_ticks`).
     pub foxes_satiated: f32,
+    /// Fração dos coelhos e das raposas de uma região que passa para a
+    /// região vizinha, por cada fronteira e por dia. Medido num mapa de
+    /// 48x48 (2x2 regiões), contando só quem, ao fim do dia, está noutra
+    /// região do que no início (as idas e voltas na fronteira não contam):
+    /// 4,6% dos coelhos e 0,57% das raposas por dia, com 2 fronteiras por
+    /// região. As raposas mudam pouco de região porque passam muito tempo
+    /// saciadas a descansar e caçam perto.
+    pub rabbits_cross: f32,
+    pub foxes_cross: f32,
 }
 
 impl Default for AggregateParams {
@@ -153,6 +162,8 @@ impl Default for AggregateParams {
             rabbits_waiting: 0.06,
             foxes_waiting: 0.09,
             foxes_satiated: 0.16,
+            rabbits_cross: 0.023,
+            foxes_cross: 0.0029,
         }
     }
 }
@@ -218,21 +229,62 @@ impl AggregateRegion {
     /// conta os coelhos e as raposas por idade e guarda a vegetação média.
     /// O detalhe individual (posição, energia) perde-se, como a GDD aceita.
     pub fn from_simulation(sim: &Simulation, params: AggregateParams, seed: u64) -> Self {
-        let mut region = Self::new(sim.config().clone(), params, seed);
-        region.day = sim.day();
-        region.biomass = sim.world.mean_biomass();
-        region.burrows = sim.world.burrows().to_vec();
-        let last = region.rabbits.len() - 1;
-        for r in &sim.rabbits {
-            region.rabbits[((r.age / TICKS_PER_DAY) as usize).min(last)] += 1;
+        Self::from_animals(
+            sim.config().clone(),
+            params,
+            seed,
+            sim.day(),
+            &sim.world,
+            &sim.rabbits,
+            &sim.foxes,
+        )
+    }
+
+    /// Como `from_simulation`, mas com os animais e o terreno dados à parte:
+    /// a paisagem corta assim uma região de 24x24 da janela completa, que é
+    /// maior. `world` tem de ter o tamanho de `config`.
+    pub fn from_animals(
+        config: Config,
+        params: AggregateParams,
+        seed: u64,
+        day: u64,
+        world: &World,
+        rabbits: &[Rabbit],
+        foxes: &[Fox],
+    ) -> Self {
+        let mut region = Self::new(config, params, seed);
+        region.day = day;
+        region.biomass = world.mean_biomass();
+        region.burrows = world.burrows().to_vec();
+        for r in rabbits {
+            region.add_rabbit(r.age);
         }
-        let last = region.foxes.len() - 1;
-        for f in &sim.foxes {
-            region.foxes[((f.age / TICKS_PER_DAY) as usize).min(last)] += 1;
+        for f in foxes {
+            region.add_fox(f.age);
         }
         // Se as raposas ainda não chegaram, chegam no mesmo dia que na
         // completa (`step_day`).
         region
+    }
+
+    /// Junta um coelho com esta idade (em ticks) à região.
+    pub fn add_rabbit(&mut self, age_ticks: u64) {
+        let last = self.rabbits.len() - 1;
+        self.rabbits[((age_ticks / TICKS_PER_DAY) as usize).min(last)] += 1;
+    }
+
+    /// Junta uma raposa com esta idade (em ticks) à região.
+    pub fn add_fox(&mut self, age_ticks: u64) {
+        let last = self.foxes.len() - 1;
+        self.foxes[((age_ticks / TICKS_PER_DAY) as usize).min(last)] += 1;
+    }
+
+    pub fn params(&self) -> &AggregateParams {
+        &self.params
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Uma região que começa como `Simulation::new`: os coelhos iniciais já
@@ -265,6 +317,15 @@ impl AggregateRegion {
     /// o dia e a espécie: a mesma região expandida no mesmo dia dá sempre o
     /// mesmo resultado, e o número de raposas não mexe onde ficam os coelhos.
     pub fn expand(&self, player: Option<(usize, usize)>, region_id: u64) -> Simulation {
+        let mut sim = self.expand_with(region_id, &|cell| far_from(player, cell));
+        sim.place_player(player);
+        sim
+    }
+
+    /// Como `expand`, mas quem diz onde um animal pode aparecer é `clear`.
+    /// A paisagem usa isto para regiões ao lado da do jogador, onde ele
+    /// está fora do mapa da região mas pode estar perto da fronteira.
+    pub fn expand_with(&self, region_id: u64, clear: &dyn Fn((usize, usize)) -> bool) -> Simulation {
         let c = &self.config;
         let p = &self.params;
         let (w, h) = (c.width, c.height);
@@ -293,21 +354,16 @@ impl AggregateRegion {
 
         let mut rng = stream(STREAM_RABBITS);
         let hidden: Vec<(usize, usize)> =
-            world.burrows().iter().copied().filter(|&b| far_from(player, b)).collect();
+            world.burrows().iter().copied().filter(|&b| clear(b)).collect();
         let mut rabbits = Vec::with_capacity(self.rabbit_count() as usize);
         for (days, &n) in self.rabbits.iter().enumerate() {
             for _ in 0..n {
                 let (x, y) = if !hidden.is_empty() && rng.next_f32() < p.rabbits_in_burrows {
                     hidden[rng.range_usize(hidden.len())]
                 } else {
-                    far_cell(&mut rng, w, h, player)
+                    far_cell(&mut rng, w, h, clear)
                 };
-                let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, rng.next_f32()));
-                r.age = some_hour_of(&mut rng, days).min(c.rabbit.max_age_ticks);
-                if rng.next_f32() < p.rabbits_waiting {
-                    r.cooldown = 1 + rng.range_usize(c.rabbit.repro_cooldown as usize) as u64;
-                }
-                rabbits.push(r);
+                rabbits.push(self.new_rabbit(&mut rng, days, (x, y)));
             }
         }
 
@@ -321,27 +377,43 @@ impl AggregateRegion {
         for (days, &n) in self.foxes.iter().enumerate() {
             for _ in 0..n {
                 let (x, y) = if foxes.is_empty() {
-                    far_cell(&mut rng, w, h, player)
+                    far_cell(&mut rng, w, h, clear)
                 } else {
                     let anchor = &foxes[rng.range_usize(foxes.len())];
-                    near_cell(&mut rng, w, h, (anchor.x, anchor.y), c.fox.territory_radius, player)
+                    near_cell(&mut rng, w, h, (anchor.x, anchor.y), c.fox.territory_radius, clear)
                 };
-                let mut f = Fox::newborn(x, y, lookup(&p.fox_energy, rng.next_f32()));
-                f.age = some_hour_of(&mut rng, days).min(c.fox.max_age_ticks);
-                if rng.next_f32() < p.foxes_waiting {
-                    f.cooldown = 1 + rng.range_usize(c.fox.repro_cooldown as usize) as u64;
-                }
-                if rng.next_f32() < p.foxes_satiated {
-                    f.satiety = 1 + rng.range_usize(c.fox.satiety_ticks as usize) as u64;
-                }
-                foxes.push(f);
+                foxes.push(self.new_fox(&mut rng, days, (x, y)));
             }
         }
 
         let tick = self.day * TICKS_PER_DAY;
-        let mut sim = Simulation::from_parts(c.clone(), stream(STREAM_SIM), world, rabbits, foxes, tick);
-        sim.place_player(player);
-        sim
+        Simulation::from_parts(c.clone(), stream(STREAM_SIM), world, rabbits, foxes, tick)
+    }
+
+    /// Um coelho individual com `days` dias de idade, nesta célula, com a
+    /// energia e a espera para ter crias sorteadas como na completa.
+    pub fn new_rabbit(&self, rng: &mut Rng, days: usize, (x, y): (usize, usize)) -> Rabbit {
+        let (c, p) = (&self.config, &self.params);
+        let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, rng.next_f32()));
+        r.age = some_hour_of(rng, days).min(c.rabbit.max_age_ticks);
+        if rng.next_f32() < p.rabbits_waiting {
+            r.cooldown = 1 + rng.range_usize(c.rabbit.repro_cooldown as usize) as u64;
+        }
+        r
+    }
+
+    /// Uma raposa individual, como `new_rabbit`.
+    pub fn new_fox(&self, rng: &mut Rng, days: usize, (x, y): (usize, usize)) -> Fox {
+        let (c, p) = (&self.config, &self.params);
+        let mut f = Fox::newborn(x, y, lookup(&p.fox_energy, rng.next_f32()));
+        f.age = some_hour_of(rng, days).min(c.fox.max_age_ticks);
+        if rng.next_f32() < p.foxes_waiting {
+            f.cooldown = 1 + rng.range_usize(c.fox.repro_cooldown as usize) as u64;
+        }
+        if rng.next_f32() < p.foxes_satiated {
+            f.satiety = 1 + rng.range_usize(c.fox.satiety_ticks as usize) as u64;
+        }
+        f
     }
 
     pub fn rabbit_count(&self) -> u32 {
@@ -475,12 +547,12 @@ impl AggregateRegion {
     }
 }
 
-/// Uma célula ao acaso a mais de `SPAWN_CLEAR_RADIUS` do jogador. Num mapa
+/// Uma célula ao acaso onde `clear` deixa aparecer um animal. Num mapa
 /// pequeno demais para isso, ao fim de algumas tentativas fica a última.
-fn far_cell(rng: &mut Rng, w: usize, h: usize, player: Option<(usize, usize)>) -> (usize, usize) {
+fn far_cell(rng: &mut Rng, w: usize, h: usize, clear: &dyn Fn((usize, usize)) -> bool) -> (usize, usize) {
     let mut cell = (rng.range_usize(w), rng.range_usize(h));
     for _ in 0..SPAWN_TRIES {
-        if far_from(player, cell) {
+        if clear(cell) {
             break;
         }
         cell = (rng.range_usize(w), rng.range_usize(h));
@@ -488,25 +560,25 @@ fn far_cell(rng: &mut Rng, w: usize, h: usize, player: Option<(usize, usize)>) -
     cell
 }
 
-/// Uma célula ao acaso a `radius` ou menos de `anchor`, longe do jogador.
-/// Se não houver nenhuma assim, uma célula longe do jogador em qualquer sítio.
+/// Uma célula ao acaso a `radius` ou menos de `anchor` onde `clear` deixa
+/// aparecer um animal. Se não houver nenhuma, uma em qualquer sítio.
 fn near_cell(
     rng: &mut Rng,
     w: usize,
     h: usize,
     anchor: (usize, usize),
     radius: usize,
-    player: Option<(usize, usize)>,
+    clear: &dyn Fn((usize, usize)) -> bool,
 ) -> (usize, usize) {
     let (x0, y0) = (anchor.0.saturating_sub(radius), anchor.1.saturating_sub(radius));
     let (x1, y1) = ((anchor.0 + radius).min(w - 1), (anchor.1 + radius).min(h - 1));
     for _ in 0..SPAWN_TRIES {
         let cell = (x0 + rng.range_usize(x1 - x0 + 1), y0 + rng.range_usize(y1 - y0 + 1));
-        if distance(cell, anchor) <= radius && far_from(player, cell) {
+        if distance(cell, anchor) <= radius && clear(cell) {
             return cell;
         }
     }
-    far_cell(rng, w, h, player)
+    far_cell(rng, w, h, clear)
 }
 
 /// Uma idade em ticks dentro do dia `days` de vida: a região só sabe o dia.

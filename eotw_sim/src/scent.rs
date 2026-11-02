@@ -19,7 +19,8 @@ pub enum Scent {
     Human = 2,
 }
 
-const KINDS: usize = 3;
+/// Quantos tipos de cheiro há.
+pub const KINDS: usize = 3;
 
 /// Abaixo disto o cheiro passa a zero. Sem este chão, um rasto ficava para
 /// sempre em cerca de 7e-44: a esse tamanho, tirar 1% já não muda o número.
@@ -78,6 +79,17 @@ impl ScentField {
 
     pub fn at(&self, kind: Scent, x: usize, y: usize) -> f32 {
         self.layers[kind as usize][y * self.width + x]
+    }
+
+    /// Todos os cheiros de uma célula (para copiar o cheiro entre mapas).
+    pub fn cell(&self, x: usize, y: usize) -> [f32; KINDS] {
+        std::array::from_fn(|k| self.layers[k][y * self.width + x])
+    }
+
+    pub fn set_cell(&mut self, x: usize, y: usize, values: [f32; KINDS]) {
+        for (k, v) in values.into_iter().enumerate() {
+            self.layers[k][y * self.width + x] = v;
+        }
     }
 
     pub fn deposit(&mut self, kind: Scent, x: usize, y: usize, amount: f32) {

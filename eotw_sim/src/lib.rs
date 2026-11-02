@@ -10,6 +10,7 @@
 //! - a mesma seed dá sempre o mesmo resultado.
 
 pub mod fox;
+pub mod landscape;
 pub mod rabbit;
 pub mod region;
 pub mod report;
