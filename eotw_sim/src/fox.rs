@@ -5,7 +5,9 @@
 //! persegue-o; se não vê nenhum, usa o nariz (restos, depois coelhos, GDD 7.6);
 //! se não sente nada, deambula.
 //! Evita o jogador: se ele estiver perto, afasta-se, mesmo com fome (GDD 3.1:
-//! o jogador pode afugentar um predador).
+//! o jogador pode afugentar um predador). Também evita o cheiro que ele deixa:
+//! não fica numa célula com cheiro humano forte, e quando anda pelo nariz ou
+//! ao acaso não entra nelas. Quando vê um coelho, persegue-o na mesma.
 //! Os mecanismos de equilíbrio da GDD 7.8 estão aqui:
 //! - depois de comer fica saciada e não caça durante algum tempo;
 //! - os coelhos dentro de uma toca estão a salvo, e a vegetação densa esconde os
@@ -41,6 +43,13 @@ pub struct FoxParams {
     pub vision: usize,
     /// A esta distância do jogador, ou menos, a raposa afasta-se dele.
     pub human_fear: usize,
+    /// Cheiro humano a partir do qual a raposa sai de uma célula e não entra
+    /// nela quando segue o nariz ou deambula. Um jogador a andar deixa um rasto
+    /// de 0,7 a 1,4; com 1 o rasto quase não contava. Com 0,5, depois de dois
+    /// dias de patrulha, as raposas evitam a zona durante uns dois dias (6 horas
+    /// de raposa lá dentro nas 12 horas seguintes, contra 48 sem olfato). Com
+    /// 0,25 o rasto virava uma parede que quase não desaparecia.
+    pub human_smell_avoid: f32,
     /// O cheiro mais fraco que a raposa sente, de comida e de coelho
     /// (GDD 7.6: olfato alto).
     pub food_smell_min: f32,
@@ -103,6 +112,7 @@ impl Default for FoxParams {
             move_cost: 0.15,
             vision: 5,
             human_fear: 4,
+            human_smell_avoid: 0.5,
             food_smell_min: 0.5,
             prey_smell_min: 0.0,
             scavenge_smell_min: 8.0,
@@ -182,6 +192,16 @@ impl Fox {
             // O jogador está perto: afasta-se, e hoje não há caça nem restos.
             (self.x, self.y) = step_away(world, rng, me, human);
             self.energy -= p.move_cost;
+        } else if smells_human(world, me, p) {
+            // Cheira a gente aqui: sai para a vizinha onde cheira menos. Sem
+            // isto o cheiro quase não contava, porque a raposa passa a maior
+            // parte do tempo a descansar ou a perseguir coelhos que vê.
+            let human = |c: &(usize, usize)| world.scent.at(Scent::Human, c.0, c.1);
+            let cells = world.neighbors(me.0, me.1).into_iter().flatten();
+            if let Some(next) = cells.min_by(|a, b| human(a).total_cmp(&human(b))) {
+                (self.x, self.y) = next;
+            }
+            self.energy -= p.move_cost;
         } else if self.energy < p.full_energy && world.scraps_at(self.x, self.y) > 0.0 {
             // Restos de comida mesmo aqui: come até estar cheia.
             let eaten = world.take_scraps(self.x, self.y, p.scrap_bite);
@@ -189,6 +209,7 @@ impl Fox {
         } else if let Some(next) = hungry
             .then(|| sniff(world, rng, Scent::Food, (self.x, self.y), p.scavenge_smell_min))
             .flatten()
+            .filter(|&c| !smells_human(world, c, p))
         {
             // Cheiro forte de restos: vai lá em vez de caçar.
             (self.x, self.y) = next;
@@ -218,13 +239,17 @@ impl Fox {
                 None => {
                     // Não vê nada: segue o nariz ou, se não sente nada, deambula.
                     let me = (self.x, self.y);
-                    let food = sniff(world, rng, Scent::Food, me, p.food_smell_min);
+                    let calm = |c: &(usize, usize)| !smells_human(world, *c, p);
+                    let food = sniff(world, rng, Scent::Food, me, p.food_smell_min).filter(calm);
                     result.followed_food = food.is_some();
                     (self.x, self.y) = food
-                        .or_else(|| sniff(world, rng, Scent::Prey, me, p.prey_smell_min))
+                        .or_else(|| sniff(world, rng, Scent::Prey, me, p.prey_smell_min).filter(calm))
                         .unwrap_or_else(|| {
-                            let options: Vec<_> =
+                            let all: Vec<_> =
                                 world.neighbors(me.0, me.1).into_iter().flatten().collect();
+                            // Ao acaso, mas longe do cheiro humano, se houver por onde.
+                            let calm_cells: Vec<_> = all.iter().copied().filter(calm).collect();
+                            let options = if calm_cells.is_empty() { all } else { calm_cells };
                             options[rng.range_usize(options.len())]
                         });
                     self.energy -= p.move_cost;
@@ -270,6 +295,11 @@ impl Fox {
             false
         }
     }
+}
+
+/// A célula tem cheiro humano demais para a raposa entrar.
+fn smells_human(world: &World, cell: (usize, usize), p: &FoxParams) -> bool {
+    world.scent.at(Scent::Human, cell.0, cell.1) >= p.human_smell_avoid
 }
 
 /// O índice do coelho vivo mais próximo dentro do alcance da vista.
@@ -422,6 +452,36 @@ mod tests {
         fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, Some(jogador));
         assert!(!rabbits[0].eaten);
         assert_eq!(distance((fox.x, fox.y), jogador), 3);
+    }
+
+    #[test]
+    fn raposa_nao_entra_onde_cheira_a_gente() {
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        // Cheiro humano forte em três das quatro vizinhas: só resta (6, 5).
+        for c in [(5, 4), (5, 6), (4, 5)] {
+            world.scent.deposit(Scent::Human, c.0, c.1, 5.0);
+        }
+        for _ in 0..20 {
+            let mut fox = Fox::newborn(5, 5, 40.0);
+            fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
+            assert_eq!((fox.x, fox.y), (6, 5));
+        }
+    }
+
+    #[test]
+    fn raposa_sai_de_onde_cheira_a_gente() {
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        world.scent.deposit(Scent::Human, 5, 5, 5.0);
+        world.scent.deposit(Scent::Human, 5, 4, 3.0);
+        world.scent.deposit(Scent::Human, 4, 5, 3.0);
+        world.scent.deposit(Scent::Human, 5, 6, 2.0);
+        // Saciada: sem o cheiro ficava a descansar. Sai para onde cheira menos.
+        let mut fox = Fox::newborn(5, 5, 90.0);
+        fox.satiety = 10;
+        fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
+        assert_eq!((fox.x, fox.y), (6, 5));
     }
 
     #[test]

@@ -8,16 +8,18 @@
 use crate::rng::Rng;
 use crate::world::World;
 
-/// Os tipos de cheiro que já existem. Carcaça, predador e humano vêm mais tarde.
+/// Os tipos de cheiro que já existem. Carcaça e predador vêm mais tarde.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scent {
     /// Restos de comida deixados pelo jogador.
     Food = 0,
     /// Coelhos (presas da raposa).
     Prey = 1,
+    /// O jogador: fica no caminho por onde passou, e as raposas evitam-no.
+    Human = 2,
 }
 
-const KINDS: usize = 2;
+const KINDS: usize = 3;
 
 #[derive(Clone, Debug)]
 pub struct ScentParams {
@@ -30,6 +32,8 @@ pub struct ScentParams {
     /// Cheiro depositado por tick por cada coelho fora da toca. Dentro da toca
     /// o cheiro fica debaixo da terra: assim a toca continua a ser um refúgio.
     pub prey_per_rabbit: f32,
+    /// Cheiro depositado por tick pelo jogador.
+    pub human_per_tick: f32,
 }
 
 impl Default for ScentParams {
@@ -39,6 +43,7 @@ impl Default for ScentParams {
             decay: 0.01,
             food_per_scrap: 1.0,
             prey_per_rabbit: 1.0,
+            human_per_tick: 5.0,
         }
     }
 }

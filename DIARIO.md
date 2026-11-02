@@ -317,6 +317,37 @@ A revisão mostrou que o equilíbrio era estável, mas com margens estreitas: `h
 
 **Próximo passo:** o resto da etapa 4 está feito (terreno, animais, simulação ligada ao desenho). A seguir: commit e decidir a etapa 5 ou o cheiro humano (o jogador deixar rasto).
 
+### O rasto do jogador 👣
+
+**O que foi feito**
+
+- **Cheiro humano** (`Scent::Human`, GDD 7.6). O jogador deposita 5 por hora na célula onde está, e o cheiro espalha-se e decai como os outros.
+- **As raposas evitam-no.** Saem de uma célula com cheiro humano acima de 0,5 (`human_smell_avoid`) e não entram nelas quando seguem o nariz ou deambulam. Quando veem um coelho, perseguem-no na mesma. Os coelhos ignoram o cheiro e só reagem ao que veem: é uma das diferenças entre espécies que a GDD pede.
+- **Vista do cheiro na janela** (tecla O, ou `--smell`): azul para o rasto do jogador, amarelo para o cheiro de comida. Imagem em `docs/janela_cheiro.png`.
+- **Testes novos:**
+  - `as_raposas_evitam_o_rasto_do_jogador`;
+  - `raposa_nao_entra_onde_cheira_a_gente`;
+  - `raposa_sai_de_onde_cheira_a_gente`;
+  - `o_cheiro_humano_pinta_de_azul`.
+
+**Medido:** o jogador patrulha o perímetro de um quadrado de 8×8 durante 2 dias e depois sai. Contam-se as horas de raposa dentro da zona, em 20 seeds:
+
+| Olfato humano | 12 h depois | 48 h depois |
+|---|---|---|
+| sem | 48 | 192 |
+| limiar 1 | 48 | 192 |
+| **limiar 0,5** | **6** | **27** |
+| limiar 0,25 | 3 | 3 |
+
+**O que se aprendeu**
+
+1. **A primeira regra não fazia nada, e só a medição o mostrou.** As raposas só evitavam o cheiro quando deambulavam, mas quase nunca deambulam: ou descansam (saciadas) ou perseguem um coelho que veem. Os números eram exatamente iguais com e sem olfato. A regra que conta é a raposa *sair* de onde cheira a gente.
+2. **O limiar tinha de vir do rasto real.** Um jogador parado deixa mais de 1 à volta, mas um jogador a andar deixa só 0,7 a 1,4 no caminho. Com o limiar 1, só se evitava onde o jogador tinha estado parado. Com 0,25, o rasto virava uma parede que não desaparecia.
+3. **O jogador muda o vale sem fazer nada de propósito.** Por onde andas, as raposas deixam de passar durante uns dois dias. É o tipo de consequência que a GDD descreve: "o jogador percebe que a sua presença influenciou o vale".
+4. **Uma consequência para o teste da cabana:** com o jogador a viver junto à cabana, as raposas vão lá menos. Os testes da cabana não têm jogador, por isso não mudaram.
+
+**Verificado por ti:** com a vista do cheiro ligada, vê-se o rasto azul a seguir-te, e as raposas evitam os sítios por onde passaste. À primeira não viste o rasto. Dois testes do jogo sem janela (`a_tecla_o_liga_e_desliga_o_cheiro` e `o_rasto_de_quem_anda_fica_azul`) mostraram que o código estava certo, e com `--smell` (a vista já ligada desde o início) apareceu.
+
 ---
 
 ## 2026-11-01 (domingo)

@@ -401,6 +401,9 @@ impl Simulation {
                 self.world.scent.deposit(Scent::Prey, r.x, r.y, p.prey_per_rabbit);
             }
         }
+        if let Some((x, y)) = self.player {
+            self.world.scent.deposit(Scent::Human, x, y, p.human_per_tick);
+        }
         self.world.scent.spread(p);
     }
 
@@ -1041,6 +1044,43 @@ mod tests {
             sem += nb;
         }
         assert!(com * 2 <= sem, "{com} animais à vista com jogador, {sem} sem");
+    }
+
+    /// O rasto do jogador fica no mundo depois de ele sair (GDD 7.6, cheiro
+    /// humano): depois de dois dias a patrulhar uma zona, as raposas evitam-na
+    /// nas horas seguintes, comparado com raposas que não sentem o cheiro.
+    #[test]
+    fn as_raposas_evitam_o_rasto_do_jogador() {
+        // O perímetro de um quadrado de lado 8 à volta de (12, 12).
+        let mut rota = Vec::new();
+        rota.extend((8..16).map(|x| (x, 8)));
+        rota.extend((8..16).map(|y| (16, y)));
+        rota.extend((9..=16).rev().map(|x| (x, 16)));
+        rota.extend((9..=16).rev().map(|y| (8, y)));
+        let horas_na_zona = |seed: u64, olfato: bool| {
+            let mut config = Config {
+                seed,
+                ..Config::default()
+            };
+            if !olfato {
+                config.fox.human_smell_avoid = f32::INFINITY;
+            }
+            let mut sim = Simulation::warmed_up(config);
+            for t in 0..2 * TICKS_PER_DAY as usize {
+                sim.place_player(Some(rota[t % rota.len()]));
+                sim.step();
+            }
+            sim.place_player(None);
+            let mut horas = 0;
+            for _ in 0..12 {
+                sim.step();
+                horas += sim.foxes.iter().filter(|f| distance((f.x, f.y), (12, 12)) <= 5).count();
+            }
+            horas
+        };
+        let com: usize = (1..=20).map(|seed| horas_na_zona(seed, true)).sum();
+        let sem: usize = (1..=20).map(|seed| horas_na_zona(seed, false)).sum();
+        assert!(com * 2 <= sem, "{com} horas de raposa na zona com olfato, {sem} sem");
     }
 
     #[test]

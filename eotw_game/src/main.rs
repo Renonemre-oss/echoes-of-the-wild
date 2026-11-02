@@ -8,10 +8,11 @@
 //!   cargo run -p eotw_game
 //!   cargo run -p eotw_game -- --seed 7 --cabin
 //!   cargo run -p eotw_game -- --screenshot janela.png
+//!   cargo run -p eotw_game -- --smell   (começa com a vista do cheiro ligada)
 
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use eotw_sim::{CabinParams, Config, Simulation, TICKS_PER_DAY};
+use eotw_sim::{CabinParams, Config, Scent, Simulation, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -27,6 +28,7 @@ const SPEEDS: [f32; 6] = [1.0, 4.0, 12.0, 24.0, 72.0, 240.0];
 
 fn main() {
     let options = Options::from_args();
+    let smell = options.smell;
     let mut config = Config {
         seed: options.seed,
         ..Config::default()
@@ -57,8 +59,9 @@ fn main() {
             paused: false,
             pending: 0.0,
         })
-        .insert_resource(options)
+        .insert_resource(options.clone())
         .insert_resource(Walk { cooldown: 0.0 })
+        .insert_resource(SmellView(smell))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -72,6 +75,8 @@ fn main() {
 struct Options {
     seed: u64,
     cabin: bool,
+    /// Começar com a vista do cheiro ligada.
+    smell: bool,
     /// Guardar uma imagem da janela e sair (útil para o diário e para testes).
     screenshot: Option<String>,
 }
@@ -81,6 +86,7 @@ impl Options {
         let mut o = Options {
             seed: 42,
             cabin: false,
+            smell: false,
             screenshot: None,
         };
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -92,6 +98,7 @@ impl Options {
                     o.seed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(o.seed);
                 }
                 "--cabin" => o.cabin = true,
+                "--smell" => o.smell = true,
                 "--screenshot" => {
                     i += 1;
                     o.screenshot = args.get(i).cloned();
@@ -124,6 +131,11 @@ struct Walk {
     /// Segundos até poder dar o próximo passo.
     cooldown: f32,
 }
+
+/// A vista do cheiro (tecla O): pinta o rasto do jogador a azul e o cheiro
+/// de comida a amarelo por cima da vegetação (GDD 20.12, ver os campos de cheiro).
+#[derive(Resource)]
+struct SmellView(bool);
 
 /// Uma célula do mapa (o índice é `y * largura + x`).
 #[derive(Component)]
@@ -204,9 +216,16 @@ fn setup(mut commands: Commands, world: Res<World>, assets: Res<AssetServer>) {
     ));
 }
 
-fn controls(keys: Res<ButtonInput<KeyCode>>, mut clock: ResMut<Clock>) {
+fn controls(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut clock: ResMut<Clock>,
+    mut smell: ResMut<SmellView>,
+) {
     if keys.just_pressed(KeyCode::Space) {
         clock.paused = !clock.paused;
+    }
+    if keys.just_pressed(KeyCode::KeyO) {
+        smell.0 = !smell.0;
     }
     if keys.any_just_pressed([KeyCode::Equal, KeyCode::NumpadAdd]) {
         clock.speed = (clock.speed + 1).min(SPEEDS.len() - 1);
@@ -266,12 +285,28 @@ fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>) 
     }
 }
 
-fn draw_tiles(world: Res<World>, mut tiles: Query<(&Tile, &mut Sprite)>) {
+fn draw_tiles(world: Res<World>, smell: Res<SmellView>, mut tiles: Query<(&Tile, &mut Sprite)>) {
     let w = &world.0.world;
     for (tile, mut sprite) in &mut tiles {
         let (x, y) = (tile.0 % w.width, tile.0 / w.width);
-        sprite.color = vegetation_color(w.biomass_at(x, y) / w.capacity());
+        let mut color = vegetation_color(w.biomass_at(x, y) / w.capacity());
+        if smell.0 {
+            let human = w.scent.at(Scent::Human, x, y);
+            let food = w.scent.at(Scent::Food, x, y);
+            color = smell_tint(color, human, food);
+        }
+        sprite.color = color;
     }
+}
+
+/// Mistura a cor da célula com azul (cheiro humano) e amarelo (comida).
+/// O azul fica forte a partir de 1, perto do valor que já afasta as raposas.
+fn smell_tint(base: Color, human: f32, food: f32) -> Color {
+    let c = base.to_srgba();
+    let mut rgb = Vec3::new(c.red, c.green, c.blue);
+    rgb = rgb.lerp(Vec3::new(0.95, 0.85, 0.20), (food / 5.0).clamp(0.0, 0.85));
+    rgb = rgb.lerp(Vec3::new(0.25, 0.45, 1.0), human.clamp(0.0, 0.85));
+    Color::srgb(rgb.x, rgb.y, rgb.z)
 }
 
 /// Apaga os animais do frame anterior e desenha os de agora. São poucas
@@ -320,7 +355,12 @@ fn draw_animals(
     }
 }
 
-fn draw_panel(world: Res<World>, clock: Res<Clock>, mut panel: Query<&mut Text, With<Panel>>) {
+fn draw_panel(
+    world: Res<World>,
+    clock: Res<Clock>,
+    smell: Res<SmellView>,
+    mut panel: Query<&mut Text, With<Panel>>,
+) {
     let sim = &world.0;
     let Ok(mut text) = panel.single_mut() else {
         return;
@@ -332,14 +372,14 @@ fn draw_panel(world: Res<World>, clock: Res<Clock>, mut panel: Query<&mut Text, 
         ""
     };
     // As últimas linhas do registo da cabana, se houver cabana.
-    let log = sim.cabin_log.lines.iter().rev().take(4).rev();
+    let log = sim.cabin_log.lines.iter().rev().take(3).rev();
     let log: String = log.map(|l| format!("\n{l}")).collect();
     text.0 = format!(
         "Echoes of the Wild\n\n\
          Dia {}, {:02}h\n{state}, {} horas por segundo\n\n\
          Coelhos: {}\nRaposas: {}\nVegetação média: {:.1} de {:.0}\n\n\
-         Setas ou WASD: andar\nEspaço: pausa\n+ e -: velocidade\n\n\
-         Legenda:\n  azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
+         Setas ou WASD: andar\nEspaço: pausa\n+ e -: velocidade\nO: ver o cheiro ({})\n\n\
+         Legenda:\n  quadrado azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
@@ -348,6 +388,7 @@ fn draw_panel(world: Res<World>, clock: Res<Clock>, mut panel: Query<&mut Text, 
         sim.foxes.len(),
         sim.world.mean_biomass(),
         sim.world.capacity(),
+        if smell.0 { "ligado: azul é o teu rasto, amarelo a comida" } else { "desligado" },
         if log.is_empty() { String::new() } else { format!("\n\nCabana:{log}") },
     );
 }
@@ -416,6 +457,50 @@ mod tests {
         assert_eq!(andar_com(&[KeyCode::ArrowDown, KeyCode::ArrowRight]), (6, 6));
         // Teclas opostas anulam-se.
         assert_eq!(andar_com(&[KeyCode::KeyW, KeyCode::KeyS]), (5, 5));
+    }
+
+    #[test]
+    fn a_tecla_o_liga_e_desliga_o_cheiro() {
+        let mut app = App::new();
+        let mut input = ButtonInput::<KeyCode>::default();
+        input.press(KeyCode::KeyO);
+        app.insert_resource(input)
+            .insert_resource(Clock {
+                speed: 3,
+                paused: false,
+                pending: 0.0,
+            })
+            .insert_resource(SmellView(false))
+            .add_systems(Update, controls);
+        app.update();
+        assert!(app.world().resource::<SmellView>().0, "devia ter ligado");
+    }
+
+    /// O jogador a andar à velocidade normal do jogo (cerca de 8 células por
+    /// segundo, com o tempo a 24 horas por segundo) deixa um rasto que se vê.
+    #[test]
+    fn o_rasto_de_quem_anda_fica_azul() {
+        let mut sim = Simulation::new(Config::default());
+        // Em cada tick o jogador anda 1 ou 0 células (8 células por 3 ticks).
+        for t in 0..24usize {
+            sim.place_player(Some((2 + t / 3, 10)));
+            sim.step();
+        }
+        let base = vegetation_color(0.5).to_srgba();
+        for x in 2..9 {
+            let human = sim.world.scent.at(Scent::Human, x, 10);
+            let tinted = smell_tint(vegetation_color(0.5), human, 0.0).to_srgba();
+            assert!(tinted.blue > base.blue + 0.3, "célula ({x}, 10): cheiro {human:.2}, pouco azul");
+        }
+    }
+
+    #[test]
+    fn o_cheiro_humano_pinta_de_azul() {
+        let base = vegetation_color(0.5);
+        let sem = smell_tint(base, 0.0, 0.0).to_srgba();
+        let com = smell_tint(base, 1.0, 0.0).to_srgba();
+        assert_eq!(sem, base.to_srgba(), "sem cheiro, a cor não muda");
+        assert!(com.blue > sem.blue + 0.3);
     }
 
     #[test]
