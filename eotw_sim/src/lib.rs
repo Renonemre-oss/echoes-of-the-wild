@@ -24,5 +24,5 @@ pub use fox::{Fox, FoxParams};
 pub use rabbit::{Rabbit, RabbitParams};
 pub use rng::Rng;
 pub use scent::{Scent, ScentParams};
-pub use sim::{CabinLog, CabinParams, Config, DayStats, MigrationParams, Simulation, MIN_REGION_SIZE, TICKS_PER_DAY};
+pub use sim::{CabinLog, CabinParams, Config, DayStats, MigrationParams, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
 pub use world::{VegetationParams, World};

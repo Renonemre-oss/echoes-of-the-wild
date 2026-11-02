@@ -13,6 +13,19 @@ impl Rng {
         Self { state: seed }
     }
 
+    /// Um gerador próprio para uma combinação de números (por exemplo seed,
+    /// região, tick e espécie). Cada combinação dá uma sequência diferente e
+    /// sempre a mesma, e mudar uma parte da simulação (quantas raposas há,
+    /// por exemplo) não mexe nos números que as outras partes recebem.
+    pub fn derived(parts: &[u64]) -> Self {
+        let mut rng = Self::new(0x5EED);
+        for &part in parts {
+            rng.state ^= part;
+            rng.state = rng.next_u64();
+        }
+        rng
+    }
+
     pub fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
@@ -56,6 +69,15 @@ mod tests {
         let mut a = Rng::new(1);
         let mut b = Rng::new(2);
         assert_ne!(a.next_u64(), b.next_u64());
+    }
+
+    #[test]
+    fn derivados_dependem_de_todas_as_partes() {
+        let a = Rng::derived(&[1, 2, 3]).next_u64();
+        assert_eq!(a, Rng::derived(&[1, 2, 3]).next_u64());
+        assert_ne!(a, Rng::derived(&[1, 2, 4]).next_u64());
+        assert_ne!(a, Rng::derived(&[2, 1, 3]).next_u64());
+        assert_ne!(Rng::derived(&[0]).next_u64(), Rng::derived(&[0, 0]).next_u64());
     }
 
     #[test]

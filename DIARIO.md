@@ -444,6 +444,41 @@ Antes de continuar, li o código todo à procura de bugs que ainda não se veem 
 
 **O que se aprendeu:** os três bugs só apareciam longe dos casos que os testes cobriam: um ano de jogo, regiões grandes, médias grandes. Um teste que só usa o mapa de 24x24 durante 100 dias não os via. Agora cada um tem um teste no sítio onde falhava.
 
+
+### Níveis de detalhe, passo 2: de volta a animais individuais 🔁
+
+**O que foi feito**
+
+- **`AggregateRegion::expand`:** quando o jogador se aproxima, a região agregada volta a ter coelhos e raposas individuais (GDD 7.9).
+  - **O que se conserva:** quantos animais há de cada espécie e de cada idade, a vegetação média e as tocas. As tocas são terreno, por isso a região agregada passou a guardá-las.
+  - **O que se sorteia:** onde fica cada animal, a energia e a vegetação de cada célula. Os sorteios usam as distribuições medidas na completa (10 seeds, 5 momentos cada). Por exemplo, a energia mediana de um coelho é 36 e a de uma raposa 77; 7% dos coelhos estão numa toca.
+- **Nada aparece perto do jogador:** nenhum animal surge a 8 células ou menos dele (`SPAWN_CLEAR_RADIUS`). A mesma regra passou a valer para a migração e para a chegada das raposas, que antes podiam cair ao lado dele. Sem jogador, a simulação gasta os mesmos números ao acaso que antes, e a CLI dá exatamente o mesmo resultado, byte a byte.
+- **Números ao acaso por partes (`Rng::derived`):** cada parte da conversão (terreno, coelhos, raposas, simulação) tem a sua sequência, tirada da seed, da região, do dia e da espécie. A mesma região expandida no mesmo dia dá sempre o mesmo, e haver mais uma raposa não muda onde ficam os coelhos.
+- **`Simulation::from_parts`:** cria uma simulação a meio da vida do mundo. Não volta a anunciar "nasceu o primeiro coelho".
+- **Testes novos:**
+  - `expandir_conserva_a_populacao`;
+  - `nada_aparece_perto_do_jogador`;
+  - `expandir_e_deterministico`;
+  - `ida_e_volta_mantem_o_equilibrio`;
+  - `quem_chega_nao_aparece_ao_lado_do_jogador`;
+  - `derivados_dependem_de_todas_as_partes`.
+
+**Resultado** (20 seeds; completa e expandida a partir do mesmo estado, com o jogador no centro, dias 10 a 100):
+
+| | Coelhos | Raposas |
+|---|---|---|
+| completa | 277 | 4,8 |
+| expandida | 278 | 4,5 |
+
+Na conversão não há choque: 303 coelhos, e 5 dias depois 307.
+
+**O que se aprendeu**
+
+1. **Onde se põem os animais também é estado.** Com as raposas espalhadas ao acaso, a população de raposas subia 40%: 44 crias nos primeiros 25 dias, contra 10 na completa. A energia estava certa. O que falhava era a posição: na completa as raposas andam juntas, porque sobem os mesmos gradientes de cheiro, e o travão de densidade trava-as. Espalhadas, as que ficavam sozinhas tinham crias logo. Agora cada raposa nova é posta perto de outra, e ficam 5 crias contra 10.
+2. **Comparar com o jogador nos dois lados.** A primeira comparação tinha o jogador só na expandida, e ele também mexe nos animais.
+
+**Próximo passo:** níveis de detalhe, passo 3: um mundo com várias regiões, umas completas e outras agregadas, com animais a passar de umas para as outras.
+
 ---
 
 ## 2026-11-01 (domingo)

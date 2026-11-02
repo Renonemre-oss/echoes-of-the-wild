@@ -24,6 +24,20 @@ pub const MIN_REGION_SIZE: usize = 24;
 /// mesmo resultado.
 const GRID_MIN_PAIRS: usize = 100_000;
 
+/// Os animais que entram no mapa (migração, chegada das raposas, conversão
+/// de uma região agregada) aparecem a mais do que isto do jogador. É o dobro
+/// do medo das raposas (`human_fear`) e mais do que a vista do coelho, por
+/// isso nada surge de repente ao lado dele.
+pub const SPAWN_CLEAR_RADIUS: usize = 8;
+
+/// Tentativas para encontrar uma célula longe do jogador.
+const SPAWN_TRIES: usize = 50;
+
+/// A célula fica a mais de `SPAWN_CLEAR_RADIUS` do jogador (ou não há jogador).
+pub fn far_from(player: Option<(usize, usize)>, cell: (usize, usize)) -> bool {
+    player.is_none_or(|p| distance(p, cell) > SPAWN_CLEAR_RADIUS)
+}
+
 /// Tamanhos de população que merecem ser celebrados.
 const POPULATION_MILESTONES: [usize; 4] = [50, 100, 200, 300];
 
@@ -334,14 +348,31 @@ impl Simulation {
             let y = rng.range_usize(config.height);
             world.add_burrow(x, y);
         }
-        let mut sim = Self {
+        let mut sim = Self::assemble(config, rng, world, rabbits, Vec::new(), 0);
+        sim.leave_cabin_food();
+        if sim.config.foxes_arrive_day == 0 {
+            sim.foxes_arrive();
+        }
+        sim
+    }
+
+    /// Junta as peças numa simulação, com os contadores e o registo a zero.
+    fn assemble(
+        config: Config,
+        rng: Rng,
+        world: World,
+        rabbits: Vec<Rabbit>,
+        foxes: Vec<Fox>,
+        tick: u64,
+    ) -> Self {
+        Self {
             config,
             rng,
             world,
             rabbits,
-            foxes: Vec::new(),
+            foxes,
             player: None,
-            tick: 0,
+            tick,
             scratch: Scratch::default(),
             grid_min_pairs: GRID_MIN_PAIRS,
             today: DayCounters::default(),
@@ -360,11 +391,31 @@ impl Simulation {
             next_milestone: 0,
             extinction_logged: false,
             foxes_present: false,
-        };
-        sim.leave_cabin_food();
-        if sim.config.foxes_arrive_day == 0 {
-            sim.foxes_arrive();
         }
+    }
+
+    /// Uma simulação a meio da vida do mundo, feita a partir de peças (a
+    /// conversão de uma região agregada, GDD 7.9). Os primeiros
+    /// acontecimentos ("nasceu o primeiro coelho") já aconteceram antes, por
+    /// isso não voltam a ser anunciados.
+    pub fn from_parts(
+        config: Config,
+        rng: Rng,
+        world: World,
+        rabbits: Vec<Rabbit>,
+        foxes: Vec<Fox>,
+        tick: u64,
+    ) -> Self {
+        let mut sim = Self::assemble(config, rng, world, rabbits, foxes, tick);
+        sim.foxes_arrived = sim.day() >= sim.config.foxes_arrive_day;
+        sim.foxes_present = !sim.foxes.is_empty();
+        sim.first_scraps_logged = true;
+        sim.first_birth_logged = true;
+        sim.first_hunt_logged = true;
+        sim.first_fox_birth_logged = true;
+        let n = sim.rabbits.len();
+        sim.next_milestone = POPULATION_MILESTONES.iter().filter(|&&m| n >= m).count();
+        sim.leave_cabin_food();
         sim
     }
 
@@ -397,10 +448,8 @@ impl Simulation {
     /// As raposas iniciais chegam, em células ao acaso.
     fn foxes_arrive(&mut self) {
         self.foxes_arrived = true;
-        let (w, h) = (self.world.width, self.world.height);
         for _ in 0..self.config.initial_foxes {
-            let x = self.rng.range_usize(w);
-            let y = self.rng.range_usize(h);
+            let (x, y) = self.spawn_cell(|rng, w, h| (rng.range_usize(w), rng.range_usize(h)));
             let mut fox = Fox::newborn(x, y, self.config.fox.energy_start);
             fox.age = self.config.fox.maturity_ticks;
             self.foxes.push(fox);
@@ -742,15 +791,32 @@ impl Simulation {
         }
     }
 
-    /// Uma célula ao acaso na margem do mapa.
+    /// Uma célula ao acaso na margem do mapa, longe do jogador.
     fn edge_cell(&mut self) -> (usize, usize) {
+        self.spawn_cell(|rng, w, h| match rng.range_usize(4) {
+            0 => (rng.range_usize(w), 0),
+            1 => (rng.range_usize(w), h - 1),
+            2 => (0, rng.range_usize(h)),
+            _ => (w - 1, rng.range_usize(h)),
+        })
+    }
+
+    /// Escolhe com `pick` uma célula para um animal aparecer, a mais de
+    /// `SPAWN_CLEAR_RADIUS` do jogador: um animal não pode surgir do nada à
+    /// frente dele (GDD 7.9). Sem jogador, a primeira escolha serve, e a
+    /// simulação gasta os mesmos números do `Rng` que antes.
+    fn spawn_cell(&mut self, pick: impl Fn(&mut Rng, usize, usize) -> (usize, usize)) -> (usize, usize) {
         let (w, h) = (self.world.width, self.world.height);
-        match self.rng.range_usize(4) {
-            0 => (self.rng.range_usize(w), 0),
-            1 => (self.rng.range_usize(w), h - 1),
-            2 => (0, self.rng.range_usize(h)),
-            _ => (w - 1, self.rng.range_usize(h)),
+        let mut cell = pick(&mut self.rng, w, h);
+        // Num mapa muito pequeno pode não haver célula longe que chegue:
+        // ao fim de algumas tentativas, fica a última.
+        for _ in 0..SPAWN_TRIES {
+            if far_from(self.player, cell) {
+                break;
+            }
+            cell = pick(&mut self.rng, w, h);
         }
+        cell
     }
 
     fn close_day(&mut self) {
@@ -1229,4 +1295,30 @@ mod tests {
         assert!(mortes_fome > 0, "nenhum coelho morreu de fome");
     }
 
+    /// Os animais que entram no mapa (as raposas que chegam e os que vêm
+    /// por migração) não aparecem ao lado do jogador.
+    #[test]
+    fn quem_chega_nao_aparece_ao_lado_do_jogador() {
+        for seed in 1..=20 {
+            let mut sim = Simulation::new(Config {
+                seed,
+                initial_foxes: 6,
+                foxes_arrive_day: 1,
+                ..Config::default()
+            });
+            // Na margem, onde a migração chega.
+            let jogador = (0, 12);
+            sim.place_player(Some(jogador));
+            sim.run_days(1);
+            for f in &sim.foxes {
+                assert!(distance((f.x, f.y), jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: chegou em ({}, {})", f.x, f.y);
+            }
+            sim.foxes.clear();
+            sim.run_days(3);
+            assert_eq!(sim.migrations_foxes, 1, "seed {seed}");
+            for f in &sim.foxes {
+                assert!(distance((f.x, f.y), jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: raposa em ({}, {})", f.x, f.y);
+            }
+        }
+    }
 }

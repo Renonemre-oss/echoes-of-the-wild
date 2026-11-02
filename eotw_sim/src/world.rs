@@ -107,6 +107,17 @@ impl World {
         self.burrow_list.insert(pos, (x, y));
     }
 
+    /// Todas as tocas, por ordem de linha e coluna.
+    pub fn burrows(&self) -> &[(usize, usize)] {
+        &self.burrow_list
+    }
+
+    /// Põe a biomassa de uma célula num valor (limitado à capacidade).
+    pub fn set_biomass(&mut self, x: usize, y: usize, value: f32) {
+        let i = self.idx(x, y);
+        self.biomass[i] = value.clamp(0.0, self.params.capacity);
+    }
+
     pub fn is_burrow(&self, x: usize, y: usize) -> bool {
         self.burrows[self.idx(x, y)]
     }

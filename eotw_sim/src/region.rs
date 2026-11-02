@@ -18,14 +18,28 @@
 //! O que a simulação agregada tem de reproduzir é o comportamento da
 //! completa: o mesmo equilíbrio e a mesma recuperação depois de um choque.
 
+use crate::fox::Fox;
+use crate::rabbit::Rabbit;
 use crate::rng::Rng;
-use crate::sim::{Config, Simulation, TICKS_PER_DAY};
+use crate::sim::{far_from, Config, Simulation, TICKS_PER_DAY};
+use crate::world::{distance, World};
 
 /// O tamanho do mapa (24x24) onde as tabelas foram medidas.
 const REFERENCE_CELLS: f32 = 576.0;
 
 /// A maior média que o sorteio de Poisson faz de uma vez (ver `poisson`).
 const POISSON_CHUNK: f32 = 30.0;
+
+/// As sequências de números ao acaso de cada parte da conversão (ver
+/// `Rng::derived`): o terreno, cada espécie, e a simulação que continua.
+const STREAM_BURROWS: u64 = 1;
+const STREAM_WORLD: u64 = 2;
+const STREAM_RABBITS: u64 = 3;
+const STREAM_FOXES: u64 = 4;
+const STREAM_SIM: u64 = 5;
+
+/// Tentativas para sortear uma célula longe do jogador.
+const SPAWN_TRIES: usize = 50;
 
 /// Os números do modelo agregado, medidos na simulação completa.
 #[derive(Clone, Debug)]
@@ -50,6 +64,22 @@ pub struct AggregateParams {
     /// para a vegetação ficar em 3,85 com 283 coelhos, cada um come 3,46 por
     /// dia; o ajuste à simulação completa deu 3,5.
     pub grazing: f32,
+    /// O que a conversão de volta para animais individuais sorteia, com as
+    /// distribuições medidas na simulação completa (10 seeds, 5 momentos
+    /// depois do aquecimento). Cada tabela é (fração, valor): a fração 0,5
+    /// dá a mediana. Vegetação de cada célula a dividir pela média:
+    pub biomass_spread: Vec<(f32, f32)>,
+    /// Energia de cada coelho e de cada raposa.
+    pub rabbit_energy: Vec<(f32, f32)>,
+    pub fox_energy: Vec<(f32, f32)>,
+    /// Fração dos coelhos que está dentro de uma toca.
+    pub rabbits_in_burrows: f32,
+    /// Fração dos coelhos e das raposas que acabou de ter uma cria e ainda
+    /// espera para a próxima (`repro_cooldown`).
+    pub rabbits_waiting: f32,
+    pub foxes_waiting: f32,
+    /// Fração das raposas saciadas (`satiety_ticks`).
+    pub foxes_satiated: f32,
 }
 
 impl Default for AggregateParams {
@@ -92,6 +122,37 @@ impl Default for AggregateParams {
                 (13.5, 0.0011),
             ],
             grazing: 3.5,
+            biomass_spread: vec![
+                (0.0, 0.25),
+                (0.1, 0.44),
+                (0.25, 0.57),
+                (0.5, 0.86),
+                (0.75, 1.32),
+                (0.9, 1.79),
+                (1.0, 2.6),
+            ],
+            rabbit_energy: vec![
+                (0.0, 5.0),
+                (0.1, 20.5),
+                (0.25, 28.7),
+                (0.5, 36.3),
+                (0.75, 49.9),
+                (0.9, 62.9),
+                (1.0, 90.0),
+            ],
+            fox_energy: vec![
+                (0.0, 45.0),
+                (0.1, 62.2),
+                (0.25, 67.1),
+                (0.5, 77.3),
+                (0.75, 87.8),
+                (0.9, 95.1),
+                (1.0, 100.0),
+            ],
+            rabbits_in_burrows: 0.07,
+            rabbits_waiting: 0.06,
+            foxes_waiting: 0.09,
+            foxes_satiated: 0.16,
         }
     }
 }
@@ -123,6 +184,8 @@ pub struct AggregateRegion {
     pub rabbits: Vec<u32>,
     /// Raposas por idade em dias.
     pub foxes: Vec<u32>,
+    /// As tocas: são terreno e não mudam quando a região é agregada.
+    pub burrows: Vec<(usize, usize)>,
     pub day: u64,
     config: Config,
     params: AggregateParams,
@@ -133,11 +196,17 @@ impl AggregateRegion {
     pub fn new(config: Config, params: AggregateParams, seed: u64) -> Self {
         let rabbit_days = (config.rabbit.max_age_ticks / TICKS_PER_DAY) as usize + 1;
         let fox_days = (config.fox.max_age_ticks / TICKS_PER_DAY) as usize + 1;
+        // Tocas ao acaso, com números à parte para não mudar os da região.
+        let mut dig = Rng::derived(&[config.seed, seed, STREAM_BURROWS]);
+        let burrows = (0..config.burrows)
+            .map(|_| (dig.range_usize(config.width), dig.range_usize(config.height)))
+            .collect();
         Self {
             cells: config.width * config.height,
             biomass: 0.0,
             rabbits: vec![0; rabbit_days],
             foxes: vec![0; fox_days],
+            burrows,
             day: 0,
             config,
             params,
@@ -152,6 +221,7 @@ impl AggregateRegion {
         let mut region = Self::new(sim.config().clone(), params, seed);
         region.day = sim.day();
         region.biomass = sim.world.mean_biomass();
+        region.burrows = sim.world.burrows().to_vec();
         let last = region.rabbits.len() - 1;
         for r in &sim.rabbits {
             region.rabbits[((r.age / TICKS_PER_DAY) as usize).min(last)] += 1;
@@ -160,8 +230,8 @@ impl AggregateRegion {
         for f in &sim.foxes {
             region.foxes[((f.age / TICKS_PER_DAY) as usize).min(last)] += 1;
         }
-        // As raposas que ainda não chegaram já não chegam: numa região agregada
-        // o arranque já passou.
+        // Se as raposas ainda não chegaram, chegam no mesmo dia que na
+        // completa (`step_day`).
         region
     }
 
@@ -182,6 +252,96 @@ impl AggregateRegion {
     fn foxes_arrive(&mut self) {
         let adult = (self.config.fox.maturity_ticks / TICKS_PER_DAY) as usize;
         self.foxes[adult] += self.config.initial_foxes as u32;
+    }
+
+    /// Volta a pôr animais individuais na região (GDD 7.9, quando o jogador
+    /// se aproxima). Conserva quantos há de cada espécie e de cada idade, a
+    /// vegetação média e as tocas. O que a região agregada não guarda (onde
+    /// está cada animal, a sua energia, a vegetação de cada célula) é
+    /// sorteado com as distribuições medidas na completa. Nenhum animal
+    /// aparece a `SPAWN_CLEAR_RADIUS` ou menos do jogador.
+    ///
+    /// Os sorteios vêm de `Rng::derived` com a seed, a região (`region_id`),
+    /// o dia e a espécie: a mesma região expandida no mesmo dia dá sempre o
+    /// mesmo resultado, e o número de raposas não mexe onde ficam os coelhos.
+    pub fn expand(&self, player: Option<(usize, usize)>, region_id: u64) -> Simulation {
+        let c = &self.config;
+        let p = &self.params;
+        let (w, h) = (c.width, c.height);
+        let stream = |part: u64| Rng::derived(&[c.seed, region_id, self.day, part]);
+
+        // O terreno: as mesmas tocas e a vegetação com a média certa.
+        let mut rng = stream(STREAM_WORLD);
+        let mut world = World::new(w, h, c.vegetation.clone(), &mut rng);
+        for &(x, y) in &self.burrows {
+            world.add_burrow(x, y);
+        }
+        let spread: Vec<f32> = (0..w * h).map(|_| lookup(&p.biomass_spread, rng.next_f32())).collect();
+        let mut scale = self.biomass / (spread.iter().sum::<f32>() / (w * h) as f32);
+        // As células que passariam da capacidade ficam nela e a média desce
+        // um pouco; umas voltas a corrigir a escala chegam para a acertar.
+        for _ in 0..5 {
+            for (i, s) in spread.iter().enumerate() {
+                world.set_biomass(i % w, i / w, s * scale);
+            }
+            let mean = world.mean_biomass();
+            if mean <= 0.0 || (mean - self.biomass).abs() < 1e-4 {
+                break;
+            }
+            scale *= self.biomass / mean;
+        }
+
+        let mut rng = stream(STREAM_RABBITS);
+        let hidden: Vec<(usize, usize)> =
+            world.burrows().iter().copied().filter(|&b| far_from(player, b)).collect();
+        let mut rabbits = Vec::with_capacity(self.rabbit_count() as usize);
+        for (days, &n) in self.rabbits.iter().enumerate() {
+            for _ in 0..n {
+                let (x, y) = if !hidden.is_empty() && rng.next_f32() < p.rabbits_in_burrows {
+                    hidden[rng.range_usize(hidden.len())]
+                } else {
+                    far_cell(&mut rng, w, h, player)
+                };
+                let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, rng.next_f32()));
+                r.age = some_hour_of(&mut rng, days).min(c.rabbit.max_age_ticks);
+                if rng.next_f32() < p.rabbits_waiting {
+                    r.cooldown = 1 + rng.range_usize(c.rabbit.repro_cooldown as usize) as u64;
+                }
+                rabbits.push(r);
+            }
+        }
+
+        // As raposas ficam umas perto das outras, como na completa, onde
+        // todas sobem os mesmos gradientes de cheiro e quase nenhuma está sem
+        // rival a `territory_radius` ou menos. Espalhadas ao acaso, as que
+        // ficavam sozinhas tinham crias logo (o travão de densidade só vê
+        // rivais perto): 44 crias nos primeiros 25 dias, contra 10.
+        let mut rng = stream(STREAM_FOXES);
+        let mut foxes: Vec<Fox> = Vec::with_capacity(self.fox_count() as usize);
+        for (days, &n) in self.foxes.iter().enumerate() {
+            for _ in 0..n {
+                let (x, y) = if foxes.is_empty() {
+                    far_cell(&mut rng, w, h, player)
+                } else {
+                    let anchor = &foxes[rng.range_usize(foxes.len())];
+                    near_cell(&mut rng, w, h, (anchor.x, anchor.y), c.fox.territory_radius, player)
+                };
+                let mut f = Fox::newborn(x, y, lookup(&p.fox_energy, rng.next_f32()));
+                f.age = some_hour_of(&mut rng, days).min(c.fox.max_age_ticks);
+                if rng.next_f32() < p.foxes_waiting {
+                    f.cooldown = 1 + rng.range_usize(c.fox.repro_cooldown as usize) as u64;
+                }
+                if rng.next_f32() < p.foxes_satiated {
+                    f.satiety = 1 + rng.range_usize(c.fox.satiety_ticks as usize) as u64;
+                }
+                foxes.push(f);
+            }
+        }
+
+        let tick = self.day * TICKS_PER_DAY;
+        let mut sim = Simulation::from_parts(c.clone(), stream(STREAM_SIM), world, rabbits, foxes, tick);
+        sim.place_player(player);
+        sim
     }
 
     pub fn rabbit_count(&self) -> u32 {
@@ -315,6 +475,45 @@ impl AggregateRegion {
     }
 }
 
+/// Uma célula ao acaso a mais de `SPAWN_CLEAR_RADIUS` do jogador. Num mapa
+/// pequeno demais para isso, ao fim de algumas tentativas fica a última.
+fn far_cell(rng: &mut Rng, w: usize, h: usize, player: Option<(usize, usize)>) -> (usize, usize) {
+    let mut cell = (rng.range_usize(w), rng.range_usize(h));
+    for _ in 0..SPAWN_TRIES {
+        if far_from(player, cell) {
+            break;
+        }
+        cell = (rng.range_usize(w), rng.range_usize(h));
+    }
+    cell
+}
+
+/// Uma célula ao acaso a `radius` ou menos de `anchor`, longe do jogador.
+/// Se não houver nenhuma assim, uma célula longe do jogador em qualquer sítio.
+fn near_cell(
+    rng: &mut Rng,
+    w: usize,
+    h: usize,
+    anchor: (usize, usize),
+    radius: usize,
+    player: Option<(usize, usize)>,
+) -> (usize, usize) {
+    let (x0, y0) = (anchor.0.saturating_sub(radius), anchor.1.saturating_sub(radius));
+    let (x1, y1) = ((anchor.0 + radius).min(w - 1), (anchor.1 + radius).min(h - 1));
+    for _ in 0..SPAWN_TRIES {
+        let cell = (x0 + rng.range_usize(x1 - x0 + 1), y0 + rng.range_usize(y1 - y0 + 1));
+        if distance(cell, anchor) <= radius && far_from(player, cell) {
+            return cell;
+        }
+    }
+    far_cell(rng, w, h, player)
+}
+
+/// Uma idade em ticks dentro do dia `days` de vida: a região só sabe o dia.
+fn some_hour_of(rng: &mut Rng, days: usize) -> u64 {
+    days as u64 * TICKS_PER_DAY + rng.range_usize(TICKS_PER_DAY as usize) as u64
+}
+
 /// Quantos já têm idade para se reproduzir.
 fn adults(cohorts: &[u32], maturity_ticks: u64) -> u32 {
     let from = (maturity_ticks / TICKS_PER_DAY) as usize;
@@ -331,6 +530,7 @@ fn age(cohorts: &mut [u32], born: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim::SPAWN_CLEAR_RADIUS;
 
     fn aquecida(seed: u64) -> Simulation {
         Simulation::warmed_up(Config {
@@ -459,5 +659,85 @@ mod tests {
         let (completa, agregada) = (completa / 10.0, agregada / 10.0);
         assert!(completa > 250.0 && agregada > 250.0, "completa {completa:.0}, agregada {agregada:.0}");
         assert!((completa - agregada).abs() < 0.15 * completa, "completa {completa:.0}, agregada {agregada:.0}");
+    }
+
+    /// GDD 18.6 e 7.9: de agregada para animais individuais, a população
+    /// conserva-se, idade a idade, e a vegetação média e as tocas também.
+    #[test]
+    fn expandir_conserva_a_populacao() {
+        for seed in 1..=5 {
+            let sim = aquecida(seed);
+            let mut r = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed);
+            for _ in 0..20 {
+                r.step_day();
+            }
+            let expandida = r.expand(Some((12, 12)), 3);
+            let de_novo = AggregateRegion::from_simulation(&expandida, AggregateParams::default(), seed);
+            assert_eq!(de_novo.rabbits, r.rabbits, "seed {seed}: coelhos por idade");
+            assert_eq!(de_novo.foxes, r.foxes, "seed {seed}: raposas por idade");
+            assert!((de_novo.biomass - r.biomass).abs() < 1e-3, "seed {seed}: vegetação");
+            assert_eq!(expandida.world.burrows(), sim.world.burrows());
+            assert_eq!(expandida.day(), r.day);
+        }
+    }
+
+    /// Quando o jogador se aproxima, nenhum animal aparece do nada perto dele,
+    /// esteja ele no meio, na margem ou num canto do mapa.
+    #[test]
+    fn nada_aparece_perto_do_jogador() {
+        for seed in 1..=5 {
+            let r = AggregateRegion::from_simulation(&aquecida(seed), AggregateParams::default(), seed);
+            for jogador in [(12, 12), (0, 0), (23, 10), (5, 20)] {
+                let sim = r.expand(Some(jogador), 0);
+                let posicoes = sim.rabbits.iter().map(|a| (a.x, a.y)).chain(sim.foxes.iter().map(|f| (f.x, f.y)));
+                for p in posicoes {
+                    assert!(distance(p, jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: animal em {p:?}, jogador em {jogador:?}");
+                }
+            }
+        }
+    }
+
+    /// A mesma região expandida no mesmo dia dá sempre os mesmos animais;
+    /// outra região com os mesmos números dá outros.
+    #[test]
+    fn expandir_e_deterministico() {
+        let r = AggregateRegion::from_simulation(&aquecida(4), AggregateParams::default(), 4);
+        let sitios = |sim: &Simulation| sim.rabbits.iter().map(|a| (a.x, a.y, a.age)).collect::<Vec<_>>();
+        assert_eq!(sitios(&r.expand(None, 1)), sitios(&r.expand(None, 1)));
+        assert_ne!(sitios(&r.expand(None, 1)), sitios(&r.expand(None, 2)));
+    }
+
+    /// Ida e volta: uma região agregada e logo expandida continua como a
+    /// completa continuaria, sem a conversão causar fomes ou explosões de
+    /// crias. As raposas espalhadas ao acaso tinham crias de repente, porque
+    /// as sozinhas não têm travão: é o que este teste apanha.
+    #[test]
+    fn ida_e_volta_mantem_o_equilibrio() {
+        let jogador = Some((12, 12));
+        let (mut completa, mut expandida) = ([0.0f32; 2], [0.0f32; 2]);
+        let mut crias = [0; 2];
+        for seed in 1..=10 {
+            let mut sim = aquecida(seed);
+            let mut volta = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed).expand(jogador, 0);
+            sim.place_player(jogador);
+            let antes = sim.stats.len();
+            for dia in 0..100 {
+                sim.run_days(1);
+                volta.run_days(1);
+                if dia >= 10 {
+                    completa[0] += sim.rabbits.len() as f32;
+                    completa[1] += sim.foxes.len() as f32;
+                    expandida[0] += volta.rabbits.len() as f32;
+                    expandida[1] += volta.foxes.len() as f32;
+                }
+            }
+            crias[0] += sim.stats[antes..antes + 25].iter().map(|d| d.fox_births).sum::<usize>();
+            crias[1] += volta.stats[..25].iter().map(|d| d.fox_births).sum::<usize>();
+            assert_eq!(volta.migrations_rabbits + volta.migrations_foxes, 0, "seed {seed}: migração");
+        }
+        let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
+        assert!(perto(completa[0], expandida[0], 0.08), "coelhos: completa {}, expandida {}", completa[0], expandida[0]);
+        assert!(perto(completa[1], expandida[1], 0.25), "raposas: completa {}, expandida {}", completa[1], expandida[1]);
+        assert!(crias[1] <= 2 * crias[0].max(5), "crias de raposa nos primeiros 25 dias: completa {}, expandida {}", crias[0], crias[1]);
     }
 }
