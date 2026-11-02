@@ -167,13 +167,31 @@ impl Fox {
         }
     }
 
-    /// Um tick de vida. Pode comer restos, caçar um coelho (marca-o como `eaten`)
-    /// e ter uma cria.
-    /// `rivals` é quantas outras raposas estão a `territory_radius` ou menos;
-    /// `player` é a posição do jogador, se estiver no mapa.
+    /// Um tick de vida, a procurar coelhos na lista inteira. A simulação usa
+    /// `act_near`, que só olha para os coelhos perto; este serve os testes.
+    #[allow(clippy::too_many_arguments)]
     pub fn act(
         &mut self,
         rabbits: &mut [Rabbit],
+        world: &mut World,
+        rng: &mut Rng,
+        p: &FoxParams,
+        rivals: usize,
+        player: Option<(usize, usize)>,
+    ) -> FoxTick {
+        self.act_near(rabbits, None, world, rng, p, rivals, player)
+    }
+
+    /// Um tick de vida. Pode comer restos, caçar um coelho (marca-o como `eaten`)
+    /// e ter uma cria. `nearby` são os índices dos coelhos perto da raposa,
+    /// por ordem crescente (da grelha espacial); `None` procura em todos.
+    /// `rivals` é quantas outras raposas estão a `territory_radius` ou menos;
+    /// `player` é a posição do jogador, se estiver no mapa.
+    #[allow(clippy::too_many_arguments)]
+    pub fn act_near(
+        &mut self,
+        rabbits: &mut [Rabbit],
+        nearby: Option<&[usize]>,
         world: &mut World,
         rng: &mut Rng,
         p: &FoxParams,
@@ -216,7 +234,7 @@ impl Fox {
             self.energy -= p.move_cost;
             result.followed_food = true;
         } else if hungry {
-            match nearest_rabbit(rabbits, world, self.x, self.y, p.vision) {
+            match nearest_rabbit(rabbits, nearby, world, self.x, self.y, p.vision) {
                 Some(i) if distance((self.x, self.y), (rabbits[i].x, rabbits[i].y)) <= 1 => {
                     result.caught = self.pounce(&mut rabbits[i], world, rng, p);
                 }
@@ -304,15 +322,31 @@ fn smells_human(world: &World, cell: (usize, usize), p: &FoxParams) -> bool {
 
 /// O índice do coelho vivo mais próximo dentro do alcance da vista.
 /// Os coelhos dentro de uma toca não se veem nem se podem caçar.
+/// Procura só em `nearby`, se vier, ou em todos.
 fn nearest_rabbit(
     rabbits: &[Rabbit],
+    nearby: Option<&[usize]>,
     world: &World,
     x: usize,
     y: usize,
     vision: usize,
 ) -> Option<usize> {
+    match nearby {
+        Some(list) => nearest_of(rabbits, list.iter().copied(), world, (x, y), vision),
+        None => nearest_of(rabbits, 0..rabbits.len(), world, (x, y), vision),
+    }
+}
+
+fn nearest_of(
+    rabbits: &[Rabbit],
+    indices: impl Iterator<Item = usize>,
+    world: &World,
+    (x, y): (usize, usize),
+    vision: usize,
+) -> Option<usize> {
     let mut best: Option<(usize, usize)> = None; // (índice, distância)
-    for (i, r) in rabbits.iter().enumerate() {
+    for i in indices {
+        let r = &rabbits[i];
         if r.eaten || world.is_burrow(r.x, r.y) {
             continue;
         }

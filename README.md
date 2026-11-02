@@ -22,6 +22,7 @@ cargo run -p eotw_cli           # simulação com os valores por omissão
 cargo run -p eotw_cli -- --seed 7 --days 200 --csv relatorio.csv
 cargo run -p eotw_cli -- --cabin            # teste da cabana: tempo na zona, cadeias de eventos e um registo
 cargo run --release -p eotw_cli -- --sweep  # varredura dos parâmetros sensíveis (~1 min)
+cargo run --release -p eotw_cli -- --bench  # tempo por tick em mapas de 24 a 192 de lado
 cargo run -p eotw_game          # a janela: setas/WASD andam, Espaço pausa, + e - velocidade, O vê o cheiro
 cargo run -p eotw_game -- --cabin --seed 6
 ```

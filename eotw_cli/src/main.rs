@@ -6,8 +6,10 @@
 //!   cargo run -p eotw_cli -- --seed 7 --days 200 --csv relatorio.csv
 //!   cargo run -p eotw_cli -- --cabin
 //!   cargo run --release -p eotw_cli -- --sweep
+//!   cargo run --release -p eotw_cli -- --bench
 
-use eotw_sim::{report, sweep, CabinParams, Config, Simulation};
+use eotw_sim::{report, sweep, CabinParams, Config, Simulation, TICKS_PER_DAY};
+use std::time::Instant;
 
 fn print_help() {
     println!("eotw_cli: simulação do Echoes of the Wild em modo texto");
@@ -18,6 +20,7 @@ fn print_help() {
     println!("  --csv FICH   guardar o relatório diário em CSV");
     println!("  --cabin      teste da cabana: tempo na zona com e sem comida");
     println!("  --sweep      varrer os parâmetros sensíveis com várias seeds");
+    println!("  --bench      medir quanto tempo demora um tick, por tamanho de mapa");
     println!("  --seeds N    quantas seeds usar em --sweep e --cabin (por omissão 40 e 20)");
     println!("  --help       mostrar esta ajuda");
 }
@@ -26,6 +29,7 @@ enum Mode {
     Run,
     Cabin,
     Sweep,
+    Bench,
 }
 
 fn main() {
@@ -57,6 +61,7 @@ fn main() {
             }
             "--cabin" => mode = Mode::Cabin,
             "--sweep" => mode = Mode::Sweep,
+            "--bench" => mode = Mode::Bench,
             "--help" | "-h" => {
                 print_help();
                 return;
@@ -74,6 +79,7 @@ fn main() {
         Mode::Run => run(seed, days, csv_path),
         Mode::Cabin => cabin(seeds.unwrap_or(20), days),
         Mode::Sweep => run_sweep(seeds.unwrap_or(40), days),
+        Mode::Bench => bench(),
     }
 }
 
@@ -251,6 +257,37 @@ fn run_sweep(seeds: u64, days: u64) {
             r.max_foxes,
             r.mean_foxes,
             if r.is_stable() { "estável" } else { "INSTÁVEL" }
+        );
+    }
+}
+
+/// Mede o tempo de um tick em mapas de vários tamanhos, com coelhos e tocas na
+/// mesma densidade do mapa de 24x24. Corre depois do aquecimento, para medir o
+/// mundo cheio e não o arranque. Só faz sentido em `--release`.
+fn bench() {
+    if cfg!(debug_assertions) {
+        println!("Aviso: isto é uma compilação de debug; usa --release para números a sério.\n");
+    }
+    println!("Tempo por tick (1 hora de jogo), média de 10 dias depois do aquecimento");
+    println!();
+    println!("{:>8} {:>9} {:>9} {:>8} {:>12} {:>14}", "mapa", "células", "coelhos", "raposas", "µs por tick", "dias por seg.");
+    for size in [24, 48, 96, 192] {
+        let mut config = Config::default();
+        sweep::sized_map(&mut config, size);
+        config.initial_foxes = (config.initial_foxes * size * size / (24 * 24)).max(1);
+        let mut sim = Simulation::warmed_up(config);
+        let ticks = 10 * TICKS_PER_DAY;
+        let start = Instant::now();
+        sim.run_days(10);
+        let per_tick = start.elapsed().as_secs_f64() / ticks as f64;
+        println!(
+            "{:>8} {:>9} {:>9} {:>8} {:>12.0} {:>14.0}",
+            format!("{size}x{size}"),
+            size * size,
+            sim.rabbits.len(),
+            sim.foxes.len(),
+            per_tick * 1e6,
+            1.0 / (per_tick * TICKS_PER_DAY as f64)
         );
     }
 }

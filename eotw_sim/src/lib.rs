@@ -14,6 +14,7 @@ pub mod rabbit;
 pub mod report;
 pub mod rng;
 pub mod scent;
+pub mod spatial;
 pub mod sim;
 pub mod sweep;
 pub mod world;

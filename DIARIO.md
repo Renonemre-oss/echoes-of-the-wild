@@ -348,6 +348,32 @@ A revisão mostrou que o equilíbrio era estável, mas com margens estreitas: `h
 
 **Verificado por ti:** com a vista do cheiro ligada, vê-se o rasto azul a seguir-te, e as raposas evitam os sítios por onde passaste. À primeira não viste o rasto. Dois testes do jogo sem janela (`a_tecla_o_liga_e_desliga_o_cheiro` e `o_rasto_de_quem_anda_fica_azul`) mostraram que o código estava certo, e com `--smell` (a vista já ligada desde o início) apareceu.
 
+### Etapa 5: medir a performance ⏱️
+
+**O que foi feito**
+
+- **`eotw_cli --bench`** mede quanto tempo demora um tick em mapas de 24 a 192 células de lado, com os animais na densidade normal.
+- **Grelha espacial** (`spatial.rs`): cada animal procura só nos quadrados de 8×8 à sua volta. Era a dívida que a revisão tinha deixado para os chunks.
+- **A grelha só se usa quando compensa.** Com poucos animais é mais lenta do que percorrer a lista, por isso só se usa quando coelhos × raposas passa de 100 000 (`GRID_MIN_PAIRS`).
+- **Teste novo, `as_grelhas_nao_mudam_nada`:** 50 dias num mapa de 72×72, com e sem grelha, têm de dar exatamente o mesmo. Também comparei os relatórios CSV de 5 seeds e o teste da cabana antes e depois, e são iguais byte a byte.
+
+**Tempo por tick (1 hora de jogo), em `--release` neste portátil:**
+
+| Mapa | Coelhos | Raposas | Antes | Depois |
+|---|---|---|---|---|
+| 24×24 | 288 | 4 | 15 µs | 15 µs |
+| 48×48 | 1 245 | 16 | 116 µs | 89 µs |
+| 96×96 | 4 953 | 63 | 854 µs | 557 µs |
+| 192×192 | 19 867 | 238 | 15 339 µs | 3 099 µs |
+
+**O que se aprendeu**
+
+1. **Medir antes de otimizar.** Em 192×192, 90% do tempo ia em raposas e coelhos à procura uns dos outros na lista inteira. A vegetação e o cheiro juntos eram só 0,5 ms.
+2. **Uma otimização pode piorar os casos pequenos.** A primeira versão da grelha deixava o mapa de 24×24 duas vezes mais lento. O critério certo para a ligar é o produto coelhos × raposas, que é o número de comparações que a grelha poupa.
+3. **"Mais rápido mas igual" tem de ser provado.** A grelha devolve os animais pela ordem da lista, para os empates darem o mesmo resultado. O teste com e sem grelha garante-o num mapa onde a grelha está de facto ligada.
+
+**O que isto quer dizer para o jogo:** a 24 horas por segundo, um mapa de 192×192 gasta 3 ms por tick, o que cabe bem. A 240 horas por segundo são 4 ticks por frame (a 60 frames por segundo), ou seja, 12 ms por frame, no limite. Para o mundo quase infinito da GDD vão ser precisos os níveis de detalhe (GDD 7.9), mas não por causa do mapa do protótipo.
+
 ---
 
 ## 2026-11-01 (domingo)

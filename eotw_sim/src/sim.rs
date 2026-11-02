@@ -4,6 +4,7 @@ use crate::fox::{Fox, FoxParams};
 use crate::rabbit::{Rabbit, RabbitParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
+use crate::spatial::Grid;
 use crate::world::{distance, VegetationParams, World};
 
 /// 1 tick = 1 hora de jogo. 24 ticks = 1 dia.
@@ -15,6 +16,13 @@ pub const TICKS_PER_DAY: u64 = 24;
 /// mundo quase infinito podem ser mais pequenos, mas a simulação agregada
 /// (GDD 7.9) tem de juntar chunks até chegar a regiões deste tamanho.
 pub const MIN_REGION_SIZE: usize = 24;
+
+/// Com coelhos × raposas abaixo disto, procurar na lista inteira é mais rápido
+/// do que usar as grelhas espaciais. Num mapa de 24x24 (288 × 4) a grelha
+/// deixava o tick duas vezes mais lento, e num de 48x48 (1245 × 16) ainda 30%;
+/// a partir de 96x96 (5000 × 63) já ganha. Os dois caminhos dão exatamente o
+/// mesmo resultado.
+const GRID_MIN_PAIRS: usize = 100_000;
 
 /// Tamanhos de população que merecem ser celebrados.
 const POPULATION_MILESTONES: [usize; 4] = [50, 100, 200, 300];
@@ -258,6 +266,15 @@ struct DayCounters {
     cabin_hours_foxes: usize,
 }
 
+#[derive(Default)]
+struct Scratch {
+    fox_grid: Grid,
+    rabbit_grid: Grid,
+    fox_positions: Vec<(usize, usize)>,
+    nearby: Vec<usize>,
+    threats: Vec<(usize, usize)>,
+}
+
 pub struct Simulation {
     config: Config,
     rng: Rng,
@@ -268,6 +285,12 @@ pub struct Simulation {
     /// afastam-se dele. Sem jogador, a simulação é igual à de antes.
     pub player: Option<(usize, usize)>,
     tick: u64,
+    /// Grelhas espaciais e listas auxiliares, refeitas em cada tick e
+    /// guardadas aqui só para não alocar memória de novo.
+    scratch: Scratch,
+    /// A partir de quantos pares coelho × raposa se usam as grelhas
+    /// (`GRID_MIN_PAIRS`; os testes mudam-no para comparar os dois caminhos).
+    grid_min_pairs: usize,
     today: DayCounters,
     pub stats: Vec<DayStats>,
     /// Acontecimentos importantes, em texto legível (GDD 20.12).
@@ -319,6 +342,8 @@ impl Simulation {
             foxes: Vec::new(),
             player: None,
             tick: 0,
+            scratch: Scratch::default(),
+            grid_min_pairs: GRID_MIN_PAIRS,
             today: DayCounters::default(),
             stats: Vec::new(),
             events: Vec::new(),
@@ -437,7 +462,29 @@ impl Simulation {
 
         // Primeiro as raposas: caçam e marcam os coelhos apanhados como `eaten`.
         // As posições no início do tick servem para contar rivais perto (travão de densidade).
-        let fox_starts: Vec<(usize, usize)> = self.foxes.iter().map(|f| (f.x, f.y)).collect();
+        // As grelhas espaciais deixam cada animal procurar só à sua volta.
+        let (w, h) = (self.world.width, self.world.height);
+        // Tira as grelhas da simulação durante o tick (e devolve-as no fim),
+        // para poderem ser usadas ao mesmo tempo que o resto da simulação.
+        let mut scratch = std::mem::take(&mut self.scratch);
+        let Scratch {
+            fox_grid,
+            rabbit_grid,
+            fox_positions,
+            nearby,
+            threats,
+        } = &mut scratch;
+        fox_positions.clear();
+        fox_positions.extend(self.foxes.iter().map(|f| (f.x, f.y)));
+        let fox_starts = &*fox_positions;
+        let use_grids = self.foxes.len() * self.rabbits.len() >= self.grid_min_pairs;
+        let (use_fox_grid, use_rabbit_grid) = (use_grids, use_grids);
+        if use_fox_grid {
+            fox_grid.rebuild(w, h, fox_starts.iter().copied());
+        }
+        if use_rabbit_grid {
+            rabbit_grid.rebuild(w, h, self.rabbits.iter().map(|r| (r.x, r.y)));
+        }
         let radius = self.config.fox.territory_radius;
         let mut fox_newborns = Vec::new();
         let mut hunts = 0;
@@ -445,15 +492,24 @@ impl Simulation {
         let in_cabin = |x, y| cabin.as_ref().is_some_and(|c| c.contains(x, y));
         let scraps_before = cabin.as_ref().map_or(0.0, |c| self.world.scraps_at(c.x, c.y));
         for (i, fox) in self.foxes.iter_mut().enumerate() {
-            let rivals = fox_starts
-                .iter()
-                .enumerate()
-                .filter(|&(j, &pos)| j != i && distance(pos, fox_starts[i]) <= radius)
-                .count();
+            let is_rival = |j: usize| j != i && distance(fox_starts[j], fox_starts[i]) <= radius;
+            let rivals = if use_fox_grid {
+                fox_grid.near(fox_starts[i], radius, nearby);
+                nearby.iter().filter(|&&j| is_rival(j)).count()
+            } else {
+                (0..fox_starts.len()).filter(|&j| is_rival(j)).count()
+            };
+            let candidates = if use_rabbit_grid {
+                rabbit_grid.near((fox.x, fox.y), self.config.fox.vision, nearby);
+                Some(nearby.as_slice())
+            } else {
+                None
+            };
             let was_in = in_cabin(fox.x, fox.y);
             let scraps = cabin.as_ref().map_or(0.0, |c| self.world.scraps_at(c.x, c.y));
-            let result = fox.act(
+            let result = fox.act_near(
                 &mut self.rabbits,
+                candidates,
                 &mut self.world,
                 &mut self.rng,
                 &self.config.fox,
@@ -498,9 +554,19 @@ impl Simulation {
 
         // Depois os coelhos, pela ordem em que estão na lista (determinístico).
         // Veem onde as raposas estão agora e fogem se alguma estiver perto.
-        // O jogador também conta como ameaça para os coelhos.
-        let threats: Vec<(usize, usize)> =
-            self.foxes.iter().map(|f| (f.x, f.y)).chain(self.player).collect();
+        // Cada coelho só recebe as raposas perto dele (da grelha, pela ordem da
+        // lista) e o jogador, que também conta como ameaça.
+        fox_positions.clear();
+        fox_positions.extend(self.foxes.iter().map(|f| (f.x, f.y)));
+        let use_fox_grid = self.foxes.len() * self.rabbits.len() >= self.grid_min_pairs;
+        if use_fox_grid {
+            fox_grid.rebuild(w, h, fox_positions.iter().copied());
+        } else {
+            // Poucas raposas: todos os coelhos recebem a lista inteira.
+            threats.clear();
+            threats.extend(fox_positions.iter().copied().chain(self.player));
+        }
+        let vision = self.config.rabbit.vision;
         let mut newborns = Vec::new();
         for rabbit in self.rabbits.iter_mut() {
             if rabbit.eaten {
@@ -508,8 +574,14 @@ impl Simulation {
             }
             let was_in = in_cabin(rabbit.x, rabbit.y);
             let scraps = cabin.as_ref().map_or(0.0, |c| self.world.scraps_at(c.x, c.y));
+            if use_fox_grid {
+                fox_grid.near((rabbit.x, rabbit.y), vision, nearby);
+                threats.clear();
+                threats.extend(nearby.iter().map(|&j| fox_positions[j]));
+                threats.extend(self.player);
+            }
             if let Some(baby) =
-                rabbit.act(&mut self.world, &mut self.rng, &self.config.rabbit, &threats)
+                rabbit.act(&mut self.world, &mut self.rng, &self.config.rabbit, threats)
             {
                 newborns.push(baby);
             }
@@ -525,6 +597,7 @@ impl Simulation {
                 }
             }
         }
+        self.scratch = scratch;
         self.today.births += newborns.len();
         if !newborns.is_empty() && !self.first_birth_logged {
             self.first_birth_logged = true;
@@ -1081,6 +1154,32 @@ mod tests {
         let com: usize = (1..=20).map(|seed| horas_na_zona(seed, true)).sum();
         let sem: usize = (1..=20).map(|seed| horas_na_zona(seed, false)).sum();
         assert!(com * 2 <= sem, "{com} horas de raposa na zona com olfato, {sem} sem");
+    }
+
+    /// As grelhas espaciais só podem mudar a velocidade, nunca o resultado:
+    /// num mapa grande, com e sem grelhas, tudo tem de ficar exatamente igual.
+    #[test]
+    fn as_grelhas_nao_mudam_nada() {
+        let mut config = Config::default();
+        crate::sweep::sized_map(&mut config, 72);
+        config.initial_foxes = 18;
+        let mut com = Simulation::new(config.clone());
+        let mut sem = Simulation::new(config);
+        com.grid_min_pairs = 0;
+        sem.grid_min_pairs = usize::MAX;
+        com.place_player(Some((30, 30)));
+        sem.place_player(Some((30, 30)));
+        com.run_days(50);
+        sem.run_days(50);
+        let resumo = |s: &Simulation| {
+            let dias: Vec<(usize, usize, usize)> =
+                s.stats.iter().map(|d| (d.rabbits, d.foxes, d.deaths_predation)).collect();
+            let raposas: Vec<(usize, usize)> = s.foxes.iter().map(|f| (f.x, f.y)).collect();
+            let coelhos: Vec<(usize, usize)> = s.rabbits.iter().map(|r| (r.x, r.y)).collect();
+            (dias, raposas, coelhos)
+        };
+        assert!(com.foxes.len() * com.rabbits.len() > 0, "o teste precisa de raposas e coelhos");
+        assert_eq!(resumo(&com), resumo(&sem));
     }
 
     #[test]
