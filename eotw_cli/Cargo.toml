@@ -1,0 +1,9 @@
+[package]
+name = "eotw_cli"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "Corre a simulação sem gráficos: texto e relatórios CSV"
+
+[dependencies]
+eotw_sim = { path = "../eotw_sim" }

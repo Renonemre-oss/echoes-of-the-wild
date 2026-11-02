@@ -1,0 +1,9 @@
+[package]
+name = "eotw_game"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "O jogo (Bevy chega na etapa 4)"
+
+[dependencies]
+eotw_sim = { path = "../eotw_sim" }

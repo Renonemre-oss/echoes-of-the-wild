@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["eotw_sim", "eotw_cli", "eotw_game"]
+
+[workspace.package]
+# Versão mínima do Rust. Com uma versão mais antiga, o Cargo diz claramente
+# que é preciso atualizar (rustup update) em vez de dar erros de compilação.
+rust-version = "1.82"
+
+# Os testes de equilíbrio correm milhares de dias simulados. Sem otimização
+# demoravam mais de um minuto; com ela, poucos segundos. Só afeta `cargo test`.
+[profile.test]
+opt-level = 2
