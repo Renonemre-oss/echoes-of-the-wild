@@ -374,6 +374,76 @@ A revisão mostrou que o equilíbrio era estável, mas com margens estreitas: `h
 
 **O que isto quer dizer para o jogo:** a 24 horas por segundo, um mapa de 192×192 gasta 3 ms por tick, o que cabe bem. A 240 horas por segundo são 4 ticks por frame (a 60 frames por segundo), ou seja, 12 ms por frame, no limite. Para o mundo quase infinito da GDD vão ser precisos os níveis de detalhe (GDD 7.9), mas não por causa do mapa do protótipo.
 
+### Níveis de detalhe, passo 1: a região agregada 📊
+
+**O que foi feito**
+
+- **`region.rs`, a região agregada.** Não guarda coelhos nem raposas individuais, só quantos há de cada idade (em dias) e a vegetação média, e avança um dia de cada vez (GDD 7.9).
+- **`AggregateRegion::from_simulation`** agrega uma simulação completa: conta os animais por idade e guarda a vegetação média. A posição e a energia de cada animal perdem-se, como a GDD aceita.
+- **Testes novos:**
+  - `agregar_conserva_a_populacao`;
+  - `a_mesma_seed_da_o_mesmo_resultado`;
+  - `a_agregada_tem_o_mesmo_equilibrio_que_a_completa`;
+  - `a_agregada_recupera_de_um_choque_como_a_completa`.
+
+**De onde vêm as regras.** Primeiro recolhi o estado e as taxas de cada dia da simulação completa (30 seeds, 400 dias):
+- **Nascimentos por coelho adulto:** sobem com a vegetação, de 0,002 por dia a 0,047.
+- **Mortes por fome:** descem depressa quando há mais vegetação.
+- **Caça:** cada raposa come cerca de **0,21 coelhos por dia**, haja 200 ou 350 coelhos, 1 ou 15 raposas. A caça é limitada pela fome da raposa, não pelas presas.
+- **Raposas:** em 400 dias nenhuma morreu, de fome ou de velhice. O número delas é segurado pelo travão de densidade.
+
+O modelo usa estas tabelas diretamente. Só o consumo de vegetação foi ajustado, e deu 3,5 por coelho por dia. A curva de crescimento da vegetação já previa 3,46.
+
+**Resultado** (do mesmo estado no fim do aquecimento, 20 seeds):
+
+| Dias 100 a 360 | Coelhos | Raposas | Vegetação |
+|---|---|---|---|
+| completa | 276 | 7,2 | 3,93 |
+| agregada | 281 | 7,1 | 3,91 |
+
+E em choques que o modelo nunca viu ao ser ajustado:
+
+| Choque | Completa | Agregada |
+|---|---|---|
+| metade dos coelhos, 21 dias depois | 312 | 289 |
+| fica 1 raposa, 41 e 150 dias depois | 2,2 e 3,5 | 2,0 e 3,3 |
+
+**O que se aprendeu**
+
+1. **Contar por adulto, não por coelho.** Os nascimentos medidos por coelho davam um arranque lento demais (149 coelhos no dia 30, contra 366). No arranque quase todos são adultos; no equilíbrio muitos são novos e não se reproduzem.
+2. **A regra deduzida falhou onde as raposas não fazem o que a regra supõe.** Tentei tirar a taxa de crias das raposas do próprio travão, supondo-as espalhadas ao acaso. Com uma só raposa, a população recuperava duas vezes mais depressa do que na completa. As raposas juntam-se nos sítios com mais coelhos (todas sobem o mesmo gradiente de cheiro), por isso têm rivais perto mais vezes. A tabela medida acerta, com uma exceção: uma raposa sozinha tem crias logo.
+3. **Comparar a partir do sítio certo.** Ao início comparei as duas simulações desde o dia 0, e o ajuste ficava torcido pelo arranque artificial. No jogo, uma região passa a agregada *depois* de ter sido simulada por inteiro. Comparar a partir do mesmo estado, no fim do aquecimento, é a pergunta certa.
+4. **O que ainda difere:** a agregada varia menos de um dia para o outro (cerca de 10 coelhos para cima ou para baixo, contra 15) e não passa do equilíbrio depois de um choque. O arranque de um mundo novo também não é bem reproduzido, mas uma região agregada nunca começa do zero.
+
+**Próximo passo:** níveis de detalhe, passo 2: a conversão inversa (de agregada para animais individuais) quando o jogador se aproxima, sem animais a aparecer perto dele.
+
+### Revisão do código: três bugs antes de crescerem 🔍
+
+Antes de continuar, li o código todo à procura de bugs que ainda não se veem mas que, mais tarde, seriam difíceis de encontrar. Três eram reais e foram medidos:
+
+1. **O cheiro nunca chegava a zero.**
+   - **O que acontecia:** sem fonte, o cheiro decai 1% por tick, mas a cerca de 7e-44 tirar 1% já não muda o número. Um rasto antigo ficava lá para sempre (medido até ao dia 1666).
+   - **Porque é grave:** números assim pequenos (subnormais) tornam as contas do processador 10 vezes mais lentas. Espalhar o cheiro num mapa de 192x192 passava de 450 para 4300 µs por tick. Além disso, as raposas seguiam para sempre rastos de coelho que já não existiam.
+   - **Correção:** abaixo de 1e-6 o cheiro passa a zero.
+   - **Resultado:** um rasto desaparece em cerca de um mês de jogo. A simulação de 24x24 dá exatamente o mesmo resultado que antes, byte a byte. Teste `um_rasto_antigo_chega_a_zero`.
+2. **O sorteio de Poisson da região agregada ficava preso nos 103.**
+   - **O que acontecia:** com f32, `exp(-média)` fica pequeno demais acima de cerca de 100. 20 000 coelhos adultos davam 103 crias por dia em vez de 434.
+   - **Correção:** uma média grande parte-se em pedaços de 30. A soma de Poissons é uma Poisson, por isso o resultado continua exato.
+   - **Resultado:** 431 crias, para 434 esperadas. Teste `poisson_com_media_grande`.
+3. **As crias de raposa agregadas dependiam do tamanho da região.**
+   - **O que acontecia:** a tabela foi medida num mapa de 24x24, mas era lida pelo *número* de raposas. Uma região de 48x48 parecia sobrelotada e ficava com 18 raposas, contra 34 na completa.
+   - **Correção:** a tabela passa a ser lida pela densidade, em raposas por cada 24x24.
+   - **Resultado:** 31 raposas, contra 34 na completa. Teste `uma_regiao_maior_tem_o_mesmo_equilibrio`.
+
+**Ficaram anotados, para quando forem precisos:**
+- **Mundos diferentes noutro computador:** `exp` vem do sistema operativo e pode arredondar de outra maneira (por exemplo, no Windows). Pode quebrar "a mesma seed dá o mesmo mundo".
+- **Animais ao lado do jogador:** a migração e a chegada das raposas podem pôr animais ao lado dele (passo 2).
+- **Rasto com buracos:** a velocidades lentas, o rasto do jogador tem falhas.
+- **Jogo pesado em mapas grandes:** o jogo corre até 240 ticks por frame e cria uma entidade por animal em cada frame (passo 4).
+- **Mapas de 1x1 rebentam o programa,** e nada verifica o tamanho mínimo.
+
+**O que se aprendeu:** os três bugs só apareciam longe dos casos que os testes cobriam: um ano de jogo, regiões grandes, médias grandes. Um teste que só usa o mapa de 24x24 durante 100 dias não os via. Agora cada um tem um teste no sítio onde falhava.
+
 ---
 
 ## 2026-11-01 (domingo)

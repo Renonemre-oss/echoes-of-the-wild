@@ -21,6 +21,15 @@ pub enum Scent {
 
 const KINDS: usize = 3;
 
+/// Abaixo disto o cheiro passa a zero. Sem este chão, um rasto ficava para
+/// sempre em cerca de 7e-44: a esse tamanho, tirar 1% já não muda o número.
+/// E números assim pequenos (subnormais) tornam as contas 10 vezes mais
+/// lentas: espalhar o cheiro num mapa de 192x192 passava de 450 para 4300 µs.
+/// Também fazia as raposas seguirem, para sempre, rastos de coelho que já
+/// não existiam (`prey_smell_min` é 0). Um coelho deposita 1 por tick, por
+/// isso 1e-6 é um milionésimo disso (ver DIARIO.md).
+const FLOOR: f32 = 1e-6;
+
 #[derive(Clone, Debug)]
 pub struct ScentParams {
     /// Fração do cheiro de uma célula que se troca com as vizinhas em cada tick.
@@ -103,7 +112,8 @@ impl ScentField {
                     }
                     let here = layer[y * w + x];
                     let mixed = here + p.diffusion * (sum / n - here);
-                    self.scratch[y * w + x] = mixed * (1.0 - p.decay);
+                    let left = mixed * (1.0 - p.decay);
+                    self.scratch[y * w + x] = if left < FLOOR { 0.0 } else { left };
                 }
             }
             std::mem::swap(layer, &mut self.scratch);
@@ -170,6 +180,23 @@ mod tests {
         }
         let total: f32 = (0..9).flat_map(|y| (0..9).map(move |x| (x, y))).map(|(x, y)| f.at(Scent::Food, x, y)).sum();
         assert!(total < 0.01, "ainda há {total}");
+    }
+
+    /// Um rasto antigo acaba mesmo por desaparecer. Antes ficava em 7e-44
+    /// para sempre, e as contas com esses números eram 10 vezes mais lentas.
+    #[test]
+    fn um_rasto_antigo_chega_a_zero() {
+        let p = ScentParams::default();
+        let mut f = ScentField::new(48, 48);
+        f.deposit(Scent::Human, 24, 24, 5.0);
+        for _ in 0..24 * 400 {
+            f.spread(&p);
+        }
+        for y in 0..48 {
+            for x in 0..48 {
+                assert_eq!(f.at(Scent::Human, x, y), 0.0, "ainda há cheiro em ({x}, {y})");
+            }
+        }
     }
 
     #[test]

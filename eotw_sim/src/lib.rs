@@ -11,6 +11,7 @@
 
 pub mod fox;
 pub mod rabbit;
+pub mod region;
 pub mod report;
 pub mod rng;
 pub mod scent;

@@ -546,6 +546,8 @@ Este é o ponto tecnicamente mais delicado da simulação em camadas (7.4).
 
 **Tamanho mínimo de região:** a simulação de coelhos e raposas só é estável em regiões de pelo menos 24×24 células (`MIN_REGION_SIZE`). Numa varredura com 40 seeds, 20×20 ainda aguenta, mas com 16×16 ou menos há tão poucas raposas que desaparecem por azar e a migração passa a ser precisa muitas vezes. Os chunks podem ser mais pequenos, mas a simulação agregada junta-os em regiões deste tamanho ou maiores; uma região pequena e isolada (uma ilha, um vale fechado) tem de contar com a migração vinda das vizinhas.
 
+**No Prototype 01 (etapa 5):** a região agregada (`region.rs`) guarda coelhos e raposas por idade em dias e a vegetação média, e avança um dia de cada vez. As regras são tabelas medidas na simulação completa (nascimentos por adulto e mortes por fome em função da vegetação, 0,21 coelhos caçados por raposa por dia, crias de raposa em função do número de raposas). A partir do mesmo estado, tem o mesmo equilíbrio que a completa (281 coelhos contra 276, 7,1 raposas contra 7,2) e recupera de choques à mesma velocidade. Varia menos de dia para dia.
+
 **Regras:**
 
 - A população total conserva-se na conversão (com tolerância pequena).
