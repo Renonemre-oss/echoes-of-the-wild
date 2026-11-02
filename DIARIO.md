@@ -20,7 +20,7 @@ As entradas mais recentes ficam no topo. Quando um marco acontece, passa a ✅ n
 | 7 | Primeiro predador (raposa) | ✅ | 2026-11-02 |
 | 8 | Perceção por cheiro a funcionar | ✅ | 2026-11-02 |
 | 9 | Teste da cabana em modo texto | ✅ | 2026-11-02 |
-| 10 | Primeira janela com Bevy (etapa 4) | ⬜ | |
+| 10 | Primeira janela com Bevy (etapa 4) | ✅ | 2026-11-02 |
 | 11 | Prototype 01 completo | ⬜ | |
 
 Os marcos 5 a 11 seguem o plano da secção 19 do GDD e podem mudar.
@@ -258,6 +258,37 @@ A revisão mostrou que o equilíbrio era estável, mas com margens estreitas: `h
 3. **Medir em energia e não em unidades.** O travão diz quanta energia em restos justifica mais uma raposa. Assim, se o valor dos restos mudar outra vez, o travão continua coerente.
 
 **Próximo passo:** começar a etapa 4 (primeira janela com Bevy, marco 10).
+
+### Arrumação, git e a primeira janela 🪟
+
+**O que foi feito**
+
+- **A cópia antiga `echoes-of-the-wild/` foi apagada,** depois de confirmar que só tinha versões mais antigas dos mesmos ficheiros.
+- **`git init` e primeiro commit** (`4b4846f`).
+- **`eotw_game` com Bevy 0.16.** A janela desenha a simulação de `eotw_sim`, que continua sem saber que o Bevy existe:
+  - a vegetação, de castanho (pouca erva) a verde (muita);
+  - as tocas, os coelhos, as raposas e a cabana;
+  - um painel com o dia, as populações, a legenda e as últimas linhas do registo da cabana.
+- **Teclas:**
+  - Espaço: pausa;
+  - `+` e `-`: velocidade, de 1 a 240 horas de jogo por segundo.
+- **Opções:** `--seed`, `--cabin` e `--screenshot FICHEIRO`. Esta última guarda uma imagem da janela e fecha, e foi assim que se tirou a imagem `docs/janela_marco10.png`.
+- **Fonte DejaVu Sans em `eotw_game/assets/fonts`,** com a licença ao lado. A fonte do Bevy não tem acentos, e "Vegetação" aparecia com quadrados.
+- **`rust-version` passou para 1.85,** o mínimo do Bevy 0.16.
+
+**Marco** 🎉
+
+- Marco 10: **o ecossistema tem cara.** Pela primeira vez vê-se o mundo a mexer: os coelhos espalhados pela erva, as raposas a laranja, e a erva a ficar castanha onde os coelhos comem.
+
+**O que se aprendeu**
+
+1. **A primeira compilação do Bevy demora:** 25 minutos neste portátil. As seguintes recompilam só o nosso código (cerca de 25 segundos). O `target/` fica grande, porque o executável em modo debug tem 1,3 GB com a informação de depuração.
+2. **Escolhi o Bevy 0.16 e não o mais recente (0.20).** É a versão cuja API conheço com segurança. Atualizar é um passo a planear à parte, porque o Bevy muda a API em cada versão.
+3. **Separar a simulação do motor compensa já:** o jogo tem cerca de 300 linhas e só desenha. Toda a ecologia, os testes e as varreduras continuam em `eotw_sim`.
+
+**Verificado por ti:** a janela abre e fecha sem erros, e a pausa e a velocidade funcionam.
+
+**Próximo passo:** etapa 4, a seguir: o jogador e o movimento.
 
 ---
 

@@ -3,7 +3,8 @@ name = "eotw_game"
 version = "0.1.0"
 edition = "2021"
 rust-version.workspace = true
-description = "O jogo (Bevy chega na etapa 4)"
+description = "O jogo: a simulação desenhada numa janela com Bevy"
 
 [dependencies]
 eotw_sim = { path = "../eotw_sim" }
+bevy = "0.16"

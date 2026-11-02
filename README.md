@@ -9,7 +9,7 @@ O historial do que se vai construindo está em `DIARIO.md`.
 |---|---|
 | `eotw_sim` | A simulação (ecossistema, vegetação, coelhos, raposas). Sem dependência de motor gráfico. |
 | `eotw_cli` | Corre a simulação em modo texto e gera relatórios CSV. |
-| `eotw_game` | O jogo. O Bevy só chega na etapa 4; por agora é um esqueleto. |
+| `eotw_game` | O jogo: desenha a simulação numa janela com Bevy 0.16. Não tem ecologia própria. |
 
 ## Como correr
 
@@ -22,10 +22,12 @@ cargo run -p eotw_cli           # simulação com os valores por omissão
 cargo run -p eotw_cli -- --seed 7 --days 200 --csv relatorio.csv
 cargo run -p eotw_cli -- --cabin            # teste da cabana: tempo na zona, cadeias de eventos e um registo
 cargo run --release -p eotw_cli -- --sweep  # varredura dos parâmetros sensíveis (~1 min)
-cargo run -p eotw_game          # esqueleto do jogo
+cargo run -p eotw_game          # a janela: Espaço pausa, + e - mudam a velocidade
+cargo run -p eotw_game -- --cabin --seed 6
 ```
 
 Se `cargo run` mostrar muito texto no início, é só o Cargo a compilar. Da segunda vez é instantâneo.
+A primeira compilação do jogo (`eotw_game`, com Bevy) demora muito mais: neste portátil foram 25 minutos.
 
 ## Regras da simulação
 
