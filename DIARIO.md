@@ -105,7 +105,42 @@ Os marcos 5 a 10 e o 16 seguem o plano da secção 19 do GDD e podem mudar. Os m
 - `andar_em_cima_da_fronteira_nao_desloca_a_janela`: 4 passos para lá e 4 para cá, 10 vezes, e a janela não se mexe; com o quinto passo desloca-se, e não volta para trás ao regressar à fronteira.
 - `o_jogador_fica_longe_da_margem_da_janela`: em 3000 passos ao acaso, o jogador nunca fica a menos de 20 células da margem da janela (a não ser nas margens da paisagem).
 
-**Próximo passo:** os pontos que ainda estão em aberto: falhas no rasto a velocidade baixa, determinismo de `exp` entre plataformas e mais raposas por região na janela.
+### Mais raposas na janela 🦊
+
+**O que se via:** a janela tinha 8,5 raposas por região e as agregadas 6,5. Pensei que vinha do tamanho do mapa, porque um mapa de 48x48 também dava 8,5.
+
+**O que era:** as medições paravam cedo demais. As raposas vivem 400 dias, e as medições, e a tabela das crias de raposa, iam só até ao dia 300 depois do aquecimento. Nessa altura ainda nenhuma raposa tinha morrido de velhice e a população ainda estava a subir. Medindo até ao dia 1200:
+
+| Por região, dias 500 a 1200 | Raposas |
+|---|---|
+| um mapa de 24x24 isolado | 11,4 |
+| um mapa de 72x72 | 10,4 |
+| na janela da paisagem | 11,3 |
+| nas agregadas da paisagem | 7,9 |
+
+Só as agregadas estavam erradas, porque a tabela delas tinha sido medida antes do equilíbrio.
+
+**Porque a tabela antiga não servia:** com o mesmo número de raposas, há mais crias em equilíbrio do que no início. Com 7 raposas por região, há 0,0053 crias por raposa por dia em equilíbrio, contra 0,0026 no início. No início, as raposas descendem todas das mesmas duas e estão juntas: cada uma tem rivais no seu território, e com rivais por perto há menos crias. Em equilíbrio já estão espalhadas.
+
+**A correção:** a tabela `fox_births` foi medida de novo em cada região de 24x24 de 8 mapas de 72x72, entre os dias 500 e 1500. As crias de cada dia contam-se na região onde nascem.
+
+| Por região, dias 500 a 1200 | Antes | Agora |
+|---|---|---|
+| na janela | 11,3 | 11,5 |
+| nas agregadas | 7,9 | 10,5 |
+
+**Testes:** `a_agregada_tem_o_mesmo_equilibrio_que_a_completa` e `uma_regiao_maior_tem_o_mesmo_equilibrio` passaram a comparar os dias 500 a 900, em vez de 40 a 300. Num mapa de 24x24, a completa fica com 10,9 raposas e a agregada com 10,8. Num de 48x48, com 37,6 e 43,9 (17% a mais, dentro da tolerância de 25%).
+
+**O que se aprendeu**
+
+1. **Medir até ao equilíbrio de todos.** Os coelhos chegam ao equilíbrio em semanas, mas as raposas só depois da primeira geração morrer de velhice. Uma medição que acaba antes disso compara o arranque e não o equilíbrio.
+2. **A densidade não diz tudo.** As crias de raposa dependem também de como as raposas estão espalhadas, e isso muda muito entre o início e o equilíbrio.
+
+**O que ainda falta**
+
+- **O jogo começa longe do equilíbrio das raposas:** cerca de 4 por região, e só chegam às 10 ou 11 ao fim de cerca de 600 dias de jogo (10 minutos a 24 horas por segundo). Um aquecimento mais longo, ou mais raposas ao começar, resolve isto.
+
+**Próximo passo:** os pontos que ainda estão em aberto: o arranque longe do equilíbrio das raposas, as falhas no rasto a velocidade baixa e o determinismo de `exp` entre plataformas.
 
 ---
 

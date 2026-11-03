@@ -56,7 +56,10 @@ pub struct AggregateParams {
     /// Coelhos comidos por raposa por dia.
     pub prey_per_fox: f32,
     /// Crias por raposa por dia, pelo número de raposas em cada 24x24 de
-    /// região (medido num mapa desse tamanho).
+    /// região. Medido em cada região de 24x24 de mapas de 72x72, já em
+    /// equilíbrio (dias 500 a 1500): as raposas vivem 400 dias, por isso
+    /// antes disso ainda nenhuma morreu de velhice e a população ainda está
+    /// a subir.
     pub fox_births: Vec<(f32, f32)>,
     /// Vegetação comida por coelho por dia com a vegetação de equilíbrio
     /// (cerca de 4). Com menos vegetação comem menos, com a mesma resposta
@@ -121,14 +124,22 @@ impl Default for AggregateParams {
             fox_births: vec![
                 // Sozinha: sem rivais, tem uma cria logo que pode (uma a cada
                 // `repro_cooldown`, 20 dias). Com companhia, a taxa medida.
+                // Com 2 raposas ainda é a medição antiga, num mapa de 24x24:
+                // em equilíbrio quase nenhuma região fica com tão poucas.
                 (1.0, 0.05),
                 (2.0, 0.0039),
-                (3.5, 0.0054),
-                (5.5, 0.0032),
-                (7.5, 0.0029),
-                (9.5, 0.0016),
-                (11.5, 0.0020),
-                (13.5, 0.0011),
+                (4.0, 0.0077),
+                (6.0, 0.0059),
+                (7.0, 0.0053),
+                (8.0, 0.0042),
+                (9.0, 0.0031),
+                (10.0, 0.0029),
+                (11.0, 0.0022),
+                (12.0, 0.0021),
+                (13.0, 0.0016),
+                (14.0, 0.0014),
+                (15.5, 0.0011),
+                (17.5, 0.0008),
             ],
             grazing: 3.5,
             biomass_spread: vec![
@@ -637,10 +648,10 @@ mod tests {
         assert_eq!(correr(), correr());
     }
 
-    /// Média de coelhos, raposas e vegetação nos dias 40 a 300 depois do fim
+    /// Média de coelhos, raposas e vegetação nos dias `dias` depois do fim
     /// do aquecimento, em `seeds` seeds, nas duas simulações, num mapa de
     /// `lado` x `lado` com a densidade de animais e tocas do de 24x24.
-    fn medias(seeds: u64, lado: usize) -> ([f32; 3], [f32; 3]) {
+    fn medias(seeds: u64, lado: usize, dias: std::ops::Range<u64>) -> ([f32; 3], [f32; 3]) {
         let (mut completa, mut agregada) = ([0.0f32; 3], [0.0f32; 3]);
         let mut n = 0.0;
         for seed in 1..=seeds {
@@ -652,10 +663,10 @@ mod tests {
             config.initial_foxes = (config.initial_foxes * lado * lado / 576).max(1);
             let mut sim = Simulation::warmed_up(config);
             let mut r = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed);
-            for dia in 0..300 {
+            for dia in 0..dias.end {
                 sim.run_days(1);
                 r.step_day();
-                if dia >= 40 {
+                if dia >= dias.start {
                     completa[0] += sim.rabbits.len() as f32;
                     completa[1] += sim.foxes.len() as f32;
                     completa[2] += sim.world.mean_biomass();
@@ -671,10 +682,12 @@ mod tests {
 
     /// A simulação agregada tem o mesmo equilíbrio que a completa, a partir
     /// do mesmo estado (o fim do aquecimento): é isso que deixa trocar uma
-    /// pela outra quando o jogador se afasta.
+    /// pela outra quando o jogador se afasta. O equilíbrio das raposas só
+    /// chega depois de as primeiras morrerem de velhice (400 dias), por isso
+    /// compara-se dos 500 aos 900 dias.
     #[test]
     fn a_agregada_tem_o_mesmo_equilibrio_que_a_completa() {
-        let (c, a) = medias(10, 24);
+        let (c, a) = medias(10, 24, 500..900);
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(c[0], a[0], 0.08), "coelhos: completa {:.0}, agregada {:.0}", c[0], a[0]);
         assert!(perto(c[1], a[1], 0.25), "raposas: completa {:.1}, agregada {:.1}", c[1], a[1]);
@@ -686,7 +699,7 @@ mod tests {
     /// de 48x48 ficava com 18 raposas em vez de 34.
     #[test]
     fn uma_regiao_maior_tem_o_mesmo_equilibrio() {
-        let (c, a) = medias(4, 48);
+        let (c, a) = medias(4, 48, 500..900);
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(c[0], a[0], 0.10), "coelhos: completa {:.0}, agregada {:.0}", c[0], a[0]);
         assert!(perto(c[1], a[1], 0.25), "raposas: completa {:.1}, agregada {:.1}", c[1], a[1]);
