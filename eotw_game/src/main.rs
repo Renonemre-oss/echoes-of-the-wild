@@ -15,6 +15,7 @@
 //!   cargo run -p eotw_game -- --smell   (começa com a vista do cheiro ligada)
 //!   cargo run --release -p eotw_game -- --frames 600   (mede o tempo por frame e sai)
 //!   cargo run --release -p eotw_game -- --speed 240     (começa a 240 horas por segundo)
+//!   cargo run -p eotw_game -- --hour 22   (chega às 22h, já de noite)
 
 use bevy::prelude::*;
 use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
@@ -43,6 +44,16 @@ const _: () = assert!(VIEW_W / 2 <= WINDOW_MARGIN && VIEW_H / 2 <= WINDOW_MARGIN
 /// Tempo entre passos do jogador com a tecla carregada, em segundos.
 const PLAYER_STEP_SECS: f32 = 0.12;
 
+/// De noite, longe do jogador, as cores ficam com esta fração do brilho
+/// (GDD 15.3: noites com pouca visibilidade, mas sem um ecrã preto).
+const NIGHT_BRIGHTNESS: f32 = 0.35;
+
+/// À volta do jogador vê-se melhor de noite: com luz quase plena até
+/// `LANTERN_INNER` células, e a desaparecer até `LANTERN_OUTER`.
+const LANTERN_INNER: f32 = 2.5;
+const LANTERN_OUTER: f32 = 6.0;
+const LANTERN_LIGHT: f32 = 0.8;
+
 /// Ritmos possíveis, em horas de jogo por segundo real.
 const SPEEDS: [f32; 6] = [1.0, 4.0, 12.0, 24.0, 72.0, 240.0];
 
@@ -60,7 +71,11 @@ fn main() {
     // O jogador chega depois do aquecimento, a um mundo já em equilíbrio,
     // ao lado da cabana (ou ao centro, se não houver cabana).
     let start = config.cabin.as_ref().map_or((side / 2, side / 2), |c| (c.x, c.y + 1));
-    let land = Landscape::new(config, LANDSCAPE_REGIONS, LANDSCAPE_REGIONS, start);
+    let mut land = Landscape::new(config, LANDSCAPE_REGIONS, LANDSCAPE_REGIONS, start);
+    // O jogador chega à hora pedida (de manhã, por omissão).
+    while land.window_sim().tick() % TICKS_PER_DAY != options.hour {
+        land.step();
+    }
 
     App::new()
         .add_plugins(
@@ -132,6 +147,8 @@ struct Options {
     frames: Option<u32>,
     /// Horas de jogo por segundo ao começar (uma das de `SPEEDS`).
     speed: f32,
+    /// A hora a que o jogador chega (0 a 23).
+    hour: u64,
 }
 
 impl Options {
@@ -143,6 +160,7 @@ impl Options {
             screenshot: None,
             frames: None,
             speed: 24.0,
+            hour: 7,
         };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let mut i = 0;
@@ -165,6 +183,10 @@ impl Options {
                 "--frames" => {
                     i += 1;
                     o.frames = args.get(i).and_then(|v| v.parse().ok());
+                }
+                "--hour" => {
+                    i += 1;
+                    o.hour = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(o.hour) % TICKS_PER_DAY;
                 }
                 other => eprintln!("Argumento desconhecido (ignorado): {other}"),
             }
@@ -223,6 +245,16 @@ struct Tile(usize);
 #[derive(Component)]
 struct AnimalSprite;
 
+/// O nome da parte do dia, pela luz e pela hora.
+fn period(light: f32, hour: u64) -> &'static str {
+    match light {
+        l if l >= 1.0 => "dia",
+        l if l <= 0.0 => "noite",
+        _ if hour < 12 => "amanhecer",
+        _ => "anoitecer",
+    }
+}
+
 /// O texto com o dia, as populações e as teclas.
 #[derive(Component)]
 struct Panel;
@@ -253,6 +285,30 @@ fn in_window(land: &Landscape, (x, y): (i64, i64)) -> Option<(usize, usize)> {
         return None;
     }
     land.in_window((x as usize, y as usize))
+}
+
+/// O brilho de uma célula a `d` células do jogador, com esta luz do dia:
+/// 1 de dia; de noite, `NIGHT_BRIGHTNESS` longe dele e mais perto dele.
+fn brightness(light: f32, d: f32) -> f32 {
+    let near = ((LANTERN_OUTER - d) / (LANTERN_OUTER - LANTERN_INNER)).clamp(0.0, 1.0) * LANTERN_LIGHT;
+    NIGHT_BRIGHTNESS + (1.0 - NIGHT_BRIGHTNESS) * light.max(near)
+}
+
+/// Escurece uma cor com este brilho, puxando-a um pouco para o azul: a
+/// noite fica azul-escura e não cinzenta.
+fn shade(color: Color, b: f32) -> Color {
+    if b >= 1.0 {
+        return color;
+    }
+    let c = color.to_srgba();
+    let blue = (1.0 - b) * 0.12;
+    Color::srgb(c.red * b, c.green * b, c.blue * b + blue)
+}
+
+/// A distância, em células, de uma célula ao jogador.
+fn from_player((x, y): (i64, i64), player: (usize, usize)) -> f32 {
+    let (dx, dy) = ((x - player.0 as i64) as f32, (y - player.1 as i64) as f32);
+    (dx * dx + dy * dy).sqrt()
 }
 
 /// A cor da vegetação, de terra nua (castanho) a erva cheia (verde).
@@ -388,6 +444,7 @@ fn draw_tiles(
     let land = &world.0;
     let w = &land.window_sim().world;
     let player = land.player();
+    let light = land.window_sim().light();
     for (tile, mut sprite, mut transform, mut visible) in &mut tiles {
         let cell = tile_cell(tile.0, player);
         let pos = cell_to_screen(cell.0, cell.1);
@@ -406,6 +463,7 @@ fn draw_tiles(
             let food = w.scent.at(Scent::Food, x, y);
             color = smell_tint(color, human, food);
         }
+        let color = shade(color, brightness(light, from_player(cell, player)));
         if sprite.color != color {
             sprite.color = color;
         }
@@ -470,6 +528,11 @@ fn draw_animals(
     for f in &sim.foxes {
         items.push(mark(global(f.x, f.y), Color::srgb(0.90, 0.45, 0.12), CELL * 0.6, 3.0));
     }
+    // De noite, o que está longe do jogador vê-se mal.
+    let light = sim.light();
+    for m in &mut items {
+        m.color = shade(m.color, brightness(light, from_player(m.cell, player)));
+    }
     // O jogador: um quadrado azul com contorno claro, para se ver bem.
     let me = (player.0 as i64, player.1 as i64);
     items.push(mark(me, Color::srgb(0.95, 0.95, 1.0), CELL * 0.8, 4.0));
@@ -524,7 +587,7 @@ fn draw_panel(
     let log: String = log.map(|l| format!("\n{l}")).collect();
     let new = format!(
         "Echoes of the Wild\n\n\
-         Dia {}, {:02}h\n{state}, {} horas por segundo\n\
+         Dia {}, {:02}h, {}\n{state}, {} horas por segundo\n\
          {:.0} frames por segundo, simulação até {:.1} ms\n\n\
          Região {}, {} (de {} x {})\n\
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
@@ -535,6 +598,7 @@ fn draw_panel(
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
+        period(sim.light(), sim.tick() % TICKS_PER_DAY),
         SPEEDS[clock.speed],
         perf.fps,
         perf.sim_peak,
@@ -725,6 +789,23 @@ mod tests {
         assert!(cell_to_screen(0, 0).x < cell_to_screen(1, 0).x);
     }
 
+    /// De dia vê-se tudo. De noite, longe do jogador, as cores ficam
+    /// escuras mas não pretas, e perto dele quase como de dia.
+    #[test]
+    fn a_noite_escurece_longe_do_jogador() {
+        assert_eq!(brightness(1.0, 20.0), 1.0);
+        assert_eq!(brightness(0.0, 20.0), NIGHT_BRIGHTNESS);
+        assert!(brightness(0.0, 0.0) > 0.8);
+        assert!(brightness(0.0, 3.0) > brightness(0.0, 5.0));
+        let verde = Color::srgb(0.16, 0.50, 0.18);
+        assert_eq!(shade(verde, 1.0), verde);
+        assert_ne!(shade(verde, NIGHT_BRIGHTNESS), Color::BLACK);
+        assert_eq!(period(1.0, 12), "dia");
+        assert_eq!(period(0.0, 2), "noite");
+        assert_eq!(period(0.5, 6), "amanhecer");
+        assert_eq!(period(0.5, 20), "anoitecer");
+    }
+
     /// O que se desenha à volta do jogador enche o ecrã.
     #[test]
     fn a_vista_enche_o_ecra() {
@@ -796,7 +877,9 @@ mod tests {
         app.update();
         let land = &app.world().resource::<World>().0;
         let w = &land.window_sim().world;
-        let esperada = vegetation_color(w.biomass_at(2, 3) / w.capacity());
+        // Com a luz desta hora, na célula do próprio jogador.
+        let luz = brightness(land.window_sim().light(), 0.0);
+        let esperada = shade(vegetation_color(w.biomass_at(2, 3) / w.capacity()), luz);
         assert_eq!(app.world().get::<Sprite>(ids[0]).unwrap().color, esperada);
         assert_eq!(app.world().get::<Transform>(ids[0]).unwrap().translation.truncate(), cell_to_screen(2, 3));
         assert_eq!(*app.world().get::<Visibility>(ids[0]).unwrap(), Visibility::Visible);

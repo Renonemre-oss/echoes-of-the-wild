@@ -168,6 +168,45 @@ Os coelhos ficam entre 267 e 277 por região durante esse tempo.
 
 **Próximo passo:** etapa 6 (sobrevivência e construção), a começar pelo dia e noite.
 
+### O dia e a noite 🌙
+
+Primeiro passo da etapa 6.
+
+**A luz:** vai de 1 (dia) a 0 (noite). O amanhecer é das 5h às 7h e o anoitecer das 19h às 21h, e entre essas horas a luz sobe e desce aos poucos (`daylight.rs`).
+
+**O que muda nos animais:**
+- **Visão de noite (GDD 7.6):** o coelho passa a ver 2 células em vez de 3, e a raposa 4 em vez de 5. O olfato não muda.
+- **A raposa caça de noite (GDD 9.2):** de dia descansa e só caça abaixo de 50 de energia (`day_hunt_below`), em vez de 60.
+
+**A primeira tentativa não chegou:** só com a visão reduzida à noite, as caçadas ficavam iguais em todas as horas, cerca de 4,2% em cada uma. A raposa só caça um coelho que esteja a 1 célula dela, por isso ver 1 célula a mais ou a menos quase não conta. Para haver um ritmo de dia e noite, a raposa tinha de mudar de comportamento.
+
+**Caçadas por hora** (20 seeds, dias 500 a 900, mapas de 24x24):
+
+| | 7h às 20h | 21h | 22h | 23h | 0h às 6h |
+|---|---|---|---|---|---|
+| sem noite | 4% em cada hora | 4% | 4% | 4% | 4% em cada hora |
+| com noite | 1% no total | 34% | 23% | 15% | 27% no total |
+
+Às 21h, quando escurece, as raposas com fome saem todas ao mesmo tempo. O equilíbrio quase não muda: 269 coelhos e 10,9 raposas, contra 269 e 10,7 sem noite. Experimentei os limiares 30, 40 e 50 e dão todos o mesmo equilíbrio. Com 50 ainda há uma ou outra caçada à tarde. As tabelas das regiões agregadas são por dia, por isso continuam a servir.
+
+**No jogo:**
+- **A noite é azul-escura:** longe do jogador, as cores ficam com 35% do brilho, mas nunca pretas (GDD 15.3). À volta dele, até 6 células, vê-se quase como de dia.
+- **O painel diz a parte do dia:** "dia", "amanhecer", "anoitecer" ou "noite".
+- **O jogador chega às 7h da manhã.** Com `--hour 22` chega de noite.
+- **Desempenho:** a 240 horas por segundo, o frame passou de 3,9 para 4,8 ms (209 frames por segundo), porque as cores dos quadrados mudam a cada hora de amanhecer e de anoitecer.
+
+![A noite, com a luz à volta do jogador](docs/noite.png)
+
+**Dois testes mudaram:**
+- **`mapa_demasiado_pequeno_colapsa`:** com a noite, o mapa de 12x12 deixou de colapsar em 240 dias. Continua a colapsar, mas precisa de mais tempo, por isso o teste passou a correr 600 dias. Um mapa de 16x16 aguentou 600 dias com 40 seeds: talvez um dia o tamanho mínimo de região possa descer.
+- **`comida_junto_a_cabana_atrai_animais`:** na seed 6, com 10 restos por dia, uma raposa descobriu a cabana e ficou lá a caçar de noite, e os coelhos passaram a ir lá menos do que sem comida. É a cadeia de acontecimentos que o GDD procura (18.4), e com 50 restos já acontecia antes. Agora o teste exige que os coelhos subam no total, e em cada seed onde nenhuma raposa foi à cabana.
+
+**Testes novos:** `a_luz_sobe_de_manha_e_desce_a_tarde`, `de_noite_ve_se_menos`, `as_raposas_cacam_de_noite` (menos de 5% das caçadas de dia) e, no jogo, `a_noite_escurece_longe_do_jogador`.
+
+**O que se aprendeu:** uma regra que parece certa pode não mudar nada. A visão reduzida à noite está no GDD e faz sentido, mas só a medição das caçadas por hora mostrou que não chegava.
+
+**Próximo passo:** os coelhos, que de dia passam o tempo como de noite, e a seguir o resto da etapa 6 (inventário, recolha, ferramentas, crafting e abrigo).
+
 ## 2026-11-02 (segunda-feira)
 
 **O que foi feito**

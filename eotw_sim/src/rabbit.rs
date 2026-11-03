@@ -41,6 +41,8 @@ pub struct RabbitParams {
     /// Até quantas células de distância vê uma raposa. A raposa vê mais longe,
     /// por isso às vezes chega perto antes de o coelho dar por ela.
     pub vision: usize,
+    /// Até onde vê às escuras (GDD 7.6: a visão diminui de noite).
+    pub night_vision: usize,
     /// Abaixo desta energia o coelho deixa de fugir e arrisca ir comer. Sem isto,
     /// com raposas por perto, morriam mais coelhos de fome (escondidos, com a
     /// vegetação cheia à volta) do que caçados. Tem de ficar abaixo de
@@ -72,6 +74,7 @@ impl Default for RabbitParams {
             maturity_ticks: 24 * 10,
             max_age_ticks: 24 * 120,
             vision: 3,
+            night_vision: 2,
             desperate_energy: 30.0,
             smell_min: 1.0,
         }

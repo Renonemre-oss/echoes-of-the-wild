@@ -35,12 +35,18 @@ pub struct FoxParams {
     /// e colapsa a partir de 75; 60 fica a meio, longe das duas beiras
     /// (ver DIARIO.md e o teste `margens_de_equilibrio`).
     pub hunt_below: f32,
+    /// De dia a raposa descansa e só caça com mais fome: abaixo deste valor
+    /// em vez de `hunt_below`. Assim caça sobretudo de noite e ao
+    /// anoitecer, como uma raposa a sério (GDD 9.2: predadores noturnos).
+    pub day_hunt_below: f32,
     /// Gasto de energia por tick, mesmo parada.
     pub metabolism: f32,
     /// Gasto extra de energia por cada célula que anda (ou por cada ataque falhado).
     pub move_cost: f32,
     /// Até quantas células de distância vê um coelho.
     pub vision: usize,
+    /// Até onde vê às escuras. A raposa vê melhor no escuro do que o coelho.
+    pub night_vision: usize,
     /// A esta distância do jogador, ou menos, a raposa afasta-se dele.
     pub human_fear: usize,
     /// Cheiro humano a partir do qual a raposa sai de uma célula e não entra
@@ -108,9 +114,11 @@ impl Default for FoxParams {
             energy_start: 70.0,
             full_energy: 95.0,
             hunt_below: 60.0,
+            day_hunt_below: 50.0,
             metabolism: 0.35,
             move_cost: 0.15,
             vision: 5,
+            night_vision: 4,
             human_fear: 4,
             human_smell_avoid: 0.5,
             food_smell_min: 0.5,

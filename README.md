@@ -26,6 +26,7 @@ cargo run --release -p eotw_cli -- --bench  # tempo por tick em mapas de 24 a 19
 cargo run -p eotw_game          # a janela: setas/WASD andam, Espaço pausa, + e - velocidade, O vê o cheiro
 cargo run -p eotw_game -- --cabin --seed 6
 cargo run --release -p eotw_game -- --speed 240 --frames 600   # mede o tempo por frame e sai
+cargo run -p eotw_game -- --hour 22   # chega às 22h, já de noite (por omissão, às 7h)
 ```
 
 Se `cargo run` mostrar muito texto no início, é só o Cargo a compilar. Da segunda vez é instantâneo.

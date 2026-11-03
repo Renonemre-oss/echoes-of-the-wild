@@ -663,6 +663,8 @@ O ciclo dia/noite deve ter impacto real, mas não transformar todas as noites nu
 
 A noite poderá ser tranquila ou perigosa. O perigo depende de fatores como o bioma, clima, presença do jogador, alimento disponível e atividade das espécies.
 
+**No Prototype 01 (etapa 6):** a luz vai de 1 a 0, com o amanhecer das 5h às 7h e o anoitecer das 19h às 21h (`daylight.rs`). De noite o coelho vê 2 células em vez de 3, e a raposa 4 em vez de 5. De dia a raposa descansa e só caça abaixo de 50 de energia (de noite, abaixo de 60), por isso quase todas as caçadas são ao anoitecer e de noite. Só a visão reduzida não chegava: as caçadas ficavam iguais em todas as horas. No jogo, a noite é azul-escura longe do jogador e mais clara até 6 células dele.
+
 ## 9.3. Sistemas de sobrevivência
 
 **Decisão (v0.5):** necessidades completas (alimentação, água, temperatura e energia). O ritmo de cada uma deve ser lento e calibrado nos testes.

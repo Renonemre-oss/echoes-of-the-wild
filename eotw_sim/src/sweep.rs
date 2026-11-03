@@ -172,7 +172,9 @@ mod tests {
     fn mapa_demasiado_pequeno_colapsa() {
         // Num mapa pequeno a simulação é rápida, por isso podem ser mais seeds
         // e mais dias: o colapso é raro e precisa de tempo para aparecer.
-        let r = run("mapa 12x12", 40, 240, |c| sized_map(c, 12));
+        // Com a noite, as raposas caçam menos horas por dia e o colapso
+        // passou a precisar de mais tempo: aos 240 dias já não aparecia.
+        let r = run("mapa 12x12", 40, 600, |c| sized_map(c, 12));
         assert!(!r.is_stable(), "o mapa de 12x12 ficou estável: rever MIN_REGION_SIZE");
     }
 }
