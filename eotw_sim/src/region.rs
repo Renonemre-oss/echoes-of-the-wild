@@ -44,13 +44,25 @@ const SPAWN_TRIES: usize = 50;
 /// Os números do modelo agregado, medidos na simulação completa.
 #[derive(Clone, Debug)]
 pub struct AggregateParams {
-    /// Nascimentos por coelho adulto por dia, por vegetação média: pares
-    /// (vegetação, taxa), medidos na simulação completa; entre pontos
-    /// interpola-se em linha reta. Acima de 5 as medições saltam muito (no
-    /// arranque os adultos reproduzem-se todos ao mesmo tempo), por isso a
-    /// tabela sobe até ao máximo possível: uma cria a cada `repro_cooldown`
-    /// (5 dias), ou seja 0,2 por dia.
+    /// Nascimentos por coelho adulto por dia, pela reserva (a fração dos
+    /// coelhos com energia de `rest_cap` ou mais, ver `AggregateRegion::reserve`):
+    /// pares (reserva, taxa), medidos na simulação completa (20 seeds, 900
+    /// dias, com e sem choques); entre pontos interpola-se em linha reta. No
+    /// fim a tabela sobe até ao máximo possível: uma cria a cada
+    /// `repro_cooldown` (5 dias), ou seja 0,2 por dia.
+    ///
+    /// Com o descanso de noite, a vegetação deixou de chegar para prever as
+    /// crias: depois de um choque, com a mesma vegetação, havia o triplo. A
+    /// energia média também não chegava (sobe só de 44 para 49). O que as
+    /// prevê é quantos coelhos já passaram do descanso e estão a caminho de
+    /// `repro_threshold`.
     pub births: Vec<(f32, f32)>,
+    /// A reserva para onde os coelhos caminham, pela erva por coelho (a
+    /// vegetação de toda a região a dividir pelos coelhos).
+    pub reserve_target: Vec<(f32, f32)>,
+    /// A fração da distância a `reserve_target` que a reserva anda por dia.
+    /// Medido: depois de um choque passa de 15% para 28% em 4 dias.
+    pub reserve_rate: f32,
     /// Mortes por fome por coelho por dia, por vegetação média.
     pub hunger: Vec<(f32, f32)>,
     /// Coelhos comidos por raposa por dia.
@@ -72,7 +84,8 @@ pub struct AggregateParams {
     /// depois do aquecimento). Cada tabela é (fração, valor): a fração 0,5
     /// dá a mediana. Vegetação de cada célula a dividir pela média:
     pub biomass_spread: Vec<(f32, f32)>,
-    /// Energia de cada coelho e de cada raposa.
+    /// Energia de cada coelho e de cada raposa. A dos coelhos é deslocada
+    /// para ter a energia média da região (`AggregateRegion::rabbit_energy`).
     pub rabbit_energy: Vec<(f32, f32)>,
     pub fox_energy: Vec<(f32, f32)>,
     /// Fração dos coelhos que está dentro de uma toca.
@@ -98,29 +111,49 @@ impl Default for AggregateParams {
     fn default() -> Self {
         Self {
             births: vec![
-                (2.5, 0.0),
-                (2.625, 0.0023),
-                (2.875, 0.0050),
-                (3.125, 0.0065),
-                (3.375, 0.0085),
-                (3.625, 0.0112),
-                (3.875, 0.0143),
-                (4.125, 0.0180),
-                (4.375, 0.0217),
-                (4.625, 0.0307),
-                (4.875, 0.0473),
-                (6.0, 0.10),
-                (7.5, 0.20),
+                (0.03, 0.0054),
+                (0.05, 0.0081),
+                (0.07, 0.0100),
+                (0.09, 0.0118),
+                (0.11, 0.0134),
+                (0.13, 0.0145),
+                (0.15, 0.0159),
+                (0.17, 0.0183),
+                (0.19, 0.0216),
+                (0.21, 0.0282),
+                (0.23, 0.0375),
+                (0.25, 0.0555),
+                (0.27, 0.0701),
+                (0.29, 0.0761),
+                (0.31, 0.0907),
+                (0.35, 0.1008),
+                (0.50, 0.20),
             ],
+            reserve_target: vec![
+                (5.0, 0.13),
+                (10.0, 0.12),
+                (14.0, 0.22),
+                (18.0, 0.29),
+                (24.0, 0.34),
+                (35.0, 0.37),
+            ],
+            reserve_rate: 0.3,
             hunger: vec![
-                (2.75, 0.0338),
-                (3.25, 0.0095),
-                (3.75, 0.0036),
-                (4.25, 0.0013),
-                (4.75, 0.0004),
-                (5.25, 0.0),
+                (2.5, 0.03),
+                (2.875, 0.0118),
+                (3.125, 0.0074),
+                (3.375, 0.0048),
+                (3.625, 0.0030),
+                (3.875, 0.0016),
+                (4.125, 0.0010),
+                (4.375, 0.0008),
+                (4.625, 0.0005),
+                (4.875, 0.0003),
+                (5.125, 0.0002),
+                (5.5, 0.0001),
+                (6.0, 0.0),
             ],
-            prey_per_fox: 0.21,
+            prey_per_fox: 0.205,
             fox_births: vec![
                 // Sozinha: sem rivais, tem uma cria logo que pode (uma a cada
                 // `repro_cooldown`, 20 dias). Com companhia, a taxa medida.
@@ -141,7 +174,7 @@ impl Default for AggregateParams {
                 (15.5, 0.0011),
                 (17.5, 0.0008),
             ],
-            grazing: 3.5,
+            grazing: 3.3,
             biomass_spread: vec![
                 (0.0, 0.25),
                 (0.1, 0.44),
@@ -152,12 +185,12 @@ impl Default for AggregateParams {
                 (1.0, 2.6),
             ],
             rabbit_energy: vec![
-                (0.0, 5.0),
-                (0.1, 20.5),
-                (0.25, 28.7),
-                (0.5, 36.3),
-                (0.75, 49.9),
-                (0.9, 62.9),
+                (0.0, 1.0),
+                (0.1, 27.5),
+                (0.25, 29.8),
+                (0.5, 36.9),
+                (0.75, 45.7),
+                (0.9, 60.5),
                 (1.0, 90.0),
             ],
             fox_energy: vec![
@@ -169,7 +202,7 @@ impl Default for AggregateParams {
                 (0.9, 95.1),
                 (1.0, 100.0),
             ],
-            rabbits_in_burrows: 0.07,
+            rabbits_in_burrows: 0.24,
             rabbits_waiting: 0.06,
             foxes_waiting: 0.09,
             foxes_satiated: 0.16,
@@ -195,6 +228,22 @@ fn lookup(table: &[(f32, f32)], x: f32) -> f32 {
     y0 + (y1 - y0) * (x - x0) / (x1 - x0)
 }
 
+/// Numa tabela de (fração, valor) como `rabbit_energy`, a fração dos
+/// sorteios que dá menos do que `value` (o inverso de `lookup`).
+fn fraction_below(table: &[(f32, f32)], value: f32) -> f32 {
+    let (first, last) = (table[0], table[table.len() - 1]);
+    if value <= first.1 {
+        return first.0;
+    }
+    if value >= last.1 {
+        return last.0;
+    }
+    let i = table.partition_point(|&(_, v)| v <= value);
+    let (f0, v0) = table[i - 1];
+    let (f1, v1) = table[i];
+    f0 + (f1 - f0) * (value - v0) / (v1 - v0)
+}
+
 /// Uma região agregada.
 #[derive(Clone, Debug)]
 pub struct AggregateRegion {
@@ -202,6 +251,10 @@ pub struct AggregateRegion {
     pub cells: usize,
     /// Vegetação média por célula.
     pub biomass: f32,
+    /// A reserva: a fração dos coelhos com energia de `rest_cap` ou mais,
+    /// que já não descansam de noite e estão a caminho de ter uma cria. É
+    /// ela que diz quantas crias há (ver `AggregateParams::births`).
+    pub reserve: f32,
     /// Coelhos por idade em dias (índice 0 = nascidos hoje).
     pub rabbits: Vec<u32>,
     /// Raposas por idade em dias.
@@ -223,9 +276,11 @@ impl AggregateRegion {
         let burrows = (0..config.burrows)
             .map(|_| (dig.range_usize(config.width), dig.range_usize(config.height)))
             .collect();
+        let reserve = 1.0 - fraction_below(&params.rabbit_energy, config.rabbit.rest_cap);
         Self {
             cells: config.width * config.height,
             biomass: 0.0,
+            reserve,
             rabbits: vec![0; rabbit_days],
             foxes: vec![0; fox_days],
             burrows,
@@ -269,6 +324,10 @@ impl AggregateRegion {
         region.burrows = world.burrows().to_vec();
         for r in rabbits {
             region.add_rabbit(r.age);
+        }
+        if !rabbits.is_empty() {
+            let cap = region.config.rabbit.rest_cap;
+            region.reserve = rabbits.iter().filter(|r| r.energy >= cap).count() as f32 / rabbits.len() as f32;
         }
         for f in foxes {
             region.add_fox(f.age);
@@ -405,7 +464,11 @@ impl AggregateRegion {
     /// energia e a espera para ter crias sorteadas como na completa.
     pub fn new_rabbit(&self, rng: &mut Rng, days: usize, (x, y): (usize, usize)) -> Rabbit {
         let (c, p) = (&self.config, &self.params);
-        let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, rng.next_f32()));
+        // Sorteia de cima ou de baixo de `rest_cap` para respeitar a reserva.
+        let below = fraction_below(&p.rabbit_energy, c.rabbit.rest_cap);
+        let u = rng.next_f32();
+        let f = if rng.next_f32() < self.reserve { below + (1.0 - below) * u } else { below * u };
+        let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, f));
         r.age = some_hour_of(rng, days).min(c.rabbit.max_age_ticks);
         if rng.next_f32() < p.rabbits_waiting {
             r.cooldown = 1 + rng.range_usize(c.rabbit.repro_cooldown as usize) as u64;
@@ -461,7 +524,11 @@ impl AggregateRegion {
 
         // Coelhos: nascimentos (só dos adultos), fome, caça e velhice.
         let rabbit_adults = adults(&self.rabbits, self.config.rabbit.maturity_ticks) as f32;
-        let births = self.poisson(rabbit_adults * lookup(&p.births, b));
+        let births = self.poisson(rabbit_adults * lookup(&p.births, self.reserve));
+        if r > 0.0 {
+            let grass_per_rabbit = b * self.cells as f32 / r;
+            self.reserve += p.reserve_rate * (lookup(&p.reserve_target, grass_per_rabbit) - self.reserve);
+        }
         let hunger_rate = lookup(&p.hunger, b);
         self.remove_rabbits_at_random(hunger_rate);
         let hunted = self.poisson(f * p.prey_per_fox);

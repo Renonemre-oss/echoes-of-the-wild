@@ -22,7 +22,7 @@ use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{CabinParams, Config, Scent, TICKS_PER_DAY};
+use eotw_sim::{CabinParams, Config, Rabbit, Scent, Simulation, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -495,6 +495,13 @@ fn mark(cell: (i64, i64), color: Color, size: f32, z: f32) -> Mark {
     Mark { cell, offset: Vec2::ZERO, color, size, z }
 }
 
+/// Os coelhos que se veem, com o seu índice em `sim.rabbits`. Um coelho
+/// dentro de uma toca está escondido, como para as raposas e para o
+/// jogador na simulação: de noite, quando muitos descansam, veem-se menos.
+fn visible_rabbits(sim: &Simulation) -> impl Iterator<Item = (usize, &Rabbit)> {
+    sim.rabbits.iter().enumerate().filter(|(_, r)| !sim.world.is_burrow(r.x, r.y))
+}
+
 /// O que se desenha por cima dos quadrados (tocas, cabana, animais,
 /// jogador): os sprites são sempre os mesmos, e em cada frame mudam de
 /// sítio, cor e tamanho; os que sobram escondem-se. Antes, cada frame
@@ -517,7 +524,7 @@ fn draw_animals(
     if let Some(c) = land.cabin() {
         items.push(mark((c.x as i64, c.y as i64), Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5));
     }
-    for (i, r) in sim.rabbits.iter().enumerate() {
+    for (i, r) in visible_rabbits(sim) {
         // Vários coelhos na mesma célula ficam ligeiramente desencontrados.
         let jitter = Vec2::new((i % 3) as f32 - 1.0, ((i / 3) % 3) as f32 - 1.0) * CELL * 0.22;
         items.push(Mark {
@@ -694,7 +701,6 @@ fn screenshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eotw_sim::Simulation;
 
     /// Uma paisagem pequena (1 região), para os testes serem rápidos.
     fn paisagem(jogador: (usize, usize)) -> Landscape {
@@ -829,6 +835,21 @@ mod tests {
             let jogador = cell_to_screen(6 + passo, 5);
             assert_eq!((t.x, t.y), (jogador.x - PANEL_WIDTH / 2.0, jogador.y));
         }
+    }
+
+    /// Um coelho dentro de uma toca não se desenha.
+    #[test]
+    fn os_coelhos_na_toca_nao_se_veem() {
+        let mut sim = Simulation::new(Config::default());
+        let toca = sim.world.burrows()[0];
+        sim.rabbits.truncate(2);
+        (sim.rabbits[0].x, sim.rabbits[0].y) = toca;
+        (sim.rabbits[1].x, sim.rabbits[1].y) = (toca.0 + 1, toca.1);
+        while sim.world.is_burrow(sim.rabbits[1].x, sim.rabbits[1].y) {
+            sim.rabbits[1].y = (sim.rabbits[1].y + 1) % sim.world.height;
+        }
+        let vistos: Vec<usize> = visible_rabbits(&sim).map(|(i, _)| i).collect();
+        assert_eq!(vistos, vec![1]);
     }
 
     /// Os sprites dos animais reaproveitam-se: depois do primeiro frame não

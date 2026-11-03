@@ -6,6 +6,9 @@
 //! quando o coelho está a morrer de fome: aí arrisca e vai comer (GDD 17.3).
 //! Com fome e sem comida onde está, vai para a célula vizinha com mais
 //! vegetação; se nenhuma tiver que chegue, segue o cheiro de restos de comida.
+//! De noite, os coelhos com energia entre `night_rest_above` e `rest_cap`
+//! descansam na toca: lá não gastam energia e recuperam um pouco. Os outros
+//! continuam ativos, como de dia.
 
 use crate::rng::Rng;
 use crate::scent::{sniff, Scent};
@@ -43,6 +46,20 @@ pub struct RabbitParams {
     pub vision: usize,
     /// Até onde vê às escuras (GDD 7.6: a visão diminui de noite).
     pub night_vision: usize,
+    /// Com esta energia ou mais, o coelho vai descansar para a toca em vez de
+    /// comer. De dia não descansa (infinito): come até `full_energy`.
+    pub rest_above: f32,
+    /// O mesmo, de noite (GDD 7.1: alternar atividade e repouso). Os coelhos
+    /// com menos energia continuam ativos de noite, como de dia.
+    pub night_rest_above: f32,
+    /// Até quantas células vai buscar uma toca para descansar.
+    pub rest_range: usize,
+    /// Energia que recupera por tick a descansar na toca. A descansar não gasta
+    /// o `metabolism`: só os coelhos ativos perdem energia.
+    pub rest_recovery: f32,
+    /// Só descansa abaixo desta energia: ao chegar aqui sai da toca e vai
+    /// comer. Para chegar a `repro_threshold` tem de comer.
+    pub rest_cap: f32,
     /// Abaixo desta energia o coelho deixa de fugir e arrisca ir comer. Sem isto,
     /// com raposas por perto, morriam mais coelhos de fome (escondidos, com a
     /// vegetação cheia à volta) do que caçados. Tem de ficar abaixo de
@@ -75,6 +92,11 @@ impl Default for RabbitParams {
             max_age_ticks: 24 * 120,
             vision: 3,
             night_vision: 2,
+            rest_above: f32::INFINITY,
+            night_rest_above: 40.0,
+            rest_range: 6,
+            rest_recovery: 1.5,
+            rest_cap: 60.0,
             desperate_energy: 30.0,
             smell_min: 1.0,
         }
@@ -124,6 +146,12 @@ impl Rabbit {
         } else {
             None
         };
+        // Um coelho com energia que chegue para descansar, e uma toca perto.
+        let rest = if self.energy >= p.rest_above && self.energy < p.rest_cap {
+            world.nearest_burrow(me, p.rest_range)
+        } else {
+            None
+        };
         if let Some(threat) = threat {
             // Fuga: ignora a fome. Dentro da toca fica quieto; senão corre para a
             // toca mais próxima ou, se não houver nenhuma perto, para longe da ameaça.
@@ -136,6 +164,15 @@ impl Rabbit {
                     Some(burrow) => step_toward(world, rng, me, burrow),
                     None => step_away(world, rng, me, threat),
                 };
+                self.energy -= p.move_cost;
+            }
+        } else if let Some(burrow) = rest {
+            // Descanso: na toca não gasta energia e recupera um pouco; senão vai
+            // para lá, e enquanto anda gasta como um coelho ativo.
+            if world.is_burrow(self.x, self.y) {
+                self.energy = (self.energy + p.metabolism + p.rest_recovery).min(p.energy_max);
+            } else {
+                (self.x, self.y) = step_toward(world, rng, me, burrow);
                 self.energy -= p.move_cost;
             }
         } else if self.energy < p.full_energy {
@@ -264,6 +301,76 @@ mod tests {
         let antes = world.biomass_at(5, 5);
         coelho.act(&mut world, &mut rng, &RabbitParams::default(), &[(5, 7)]);
         assert_eq!((coelho.x, coelho.y), (5, 5));
+        assert!(world.biomass_at(5, 5) < antes);
+    }
+
+    /// Os parâmetros de noite, como a simulação os põe quando escurece.
+    fn de_noite() -> RabbitParams {
+        let p = RabbitParams::default();
+        RabbitParams {
+            rest_above: p.night_rest_above,
+            ..p
+        }
+    }
+
+    #[test]
+    fn de_noite_descansa_na_toca_e_recupera() {
+        let mut rng = Rng::new(1);
+        let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+        world.add_burrow(5, 5);
+        let mut coelho = Rabbit::newborn(5, 5, 45.0);
+        let antes = world.biomass_at(5, 5);
+        coelho.act(&mut world, &mut rng, &de_noite(), &[]);
+        assert_eq!((coelho.x, coelho.y), (5, 5));
+        assert_eq!(coelho.energy, 45.0 + de_noite().rest_recovery);
+        // A descansar não come.
+        assert_eq!(world.biomass_at(5, 5), antes);
+    }
+
+    #[test]
+    fn de_noite_vai_para_a_toca_descansar() {
+        let mut rng = Rng::new(1);
+        let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+        world.add_burrow(3, 5);
+        let mut coelho = Rabbit::newborn(5, 5, 45.0);
+        coelho.act(&mut world, &mut rng, &de_noite(), &[]);
+        assert_eq!((coelho.x, coelho.y), (4, 5));
+    }
+
+    #[test]
+    fn de_noite_com_pouca_energia_continua_a_comer() {
+        let mut rng = Rng::new(1);
+        let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+        world.add_burrow(5, 5);
+        let p = de_noite();
+        let mut coelho = Rabbit::newborn(5, 5, p.night_rest_above - 5.0);
+        let antes = world.biomass_at(5, 5);
+        coelho.act(&mut world, &mut rng, &p, &[]);
+        assert!(world.biomass_at(5, 5) < antes);
+    }
+
+    /// Acima de `rest_cap` sai da toca e vai comer: só a comer chega a
+    /// `repro_threshold`.
+    #[test]
+    fn de_noite_acima_do_teto_vai_comer() {
+        let mut rng = Rng::new(1);
+        let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+        world.add_burrow(5, 5);
+        let p = de_noite();
+        let mut coelho = Rabbit::newborn(5, 5, p.rest_cap + 5.0);
+        let antes = world.biomass_at(5, 5);
+        coelho.act(&mut world, &mut rng, &p, &[]);
+        assert!(world.biomass_at(5, 5) < antes);
+    }
+
+    #[test]
+    fn de_dia_nao_descansa() {
+        let mut rng = Rng::new(1);
+        let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+        world.add_burrow(5, 5);
+        let mut coelho = Rabbit::newborn(5, 5, 45.0);
+        let antes = world.biomass_at(5, 5);
+        coelho.act(&mut world, &mut rng, &RabbitParams::default(), &[]);
         assert!(world.biomass_at(5, 5) < antes);
     }
 

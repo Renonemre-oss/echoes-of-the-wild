@@ -207,6 +207,84 @@ Primeiro passo da etapa 6.
 
 **Próximo passo:** os coelhos, que de dia passam o tempo como de noite, e a seguir o resto da etapa 6 (inventário, recolha, ferramentas, crafting e abrigo).
 
+### Os coelhos descansam de noite 🐇
+
+**A regra final:** de noite, um coelho com energia entre 40 (`night_rest_above`) e 60 (`rest_cap`) vai para uma toca a até 6 células e descansa lá. Na toca não gasta energia e recupera 1,5 por hora. Os coelhos com menos de 40 continuam ativos, como de dia: gastam energia e só a recuperam a comer. Os que chegam aos 60 saem da toca e vão comer, porque para ter uma cria (aos 80) têm de comer. De dia ninguém descansa.
+
+**O resultado** (20 seeds, dias 500 a 900, mapas de 24x24):
+
+| | Antes | Agora |
+|---|---|---|
+| Coelhos | 269 | 264 |
+| Raposas | 10,9 | 10,4 |
+| Mortos à fome | 2 410 | 1 490 |
+| Na toca à meia-noite | 7% | 24% |
+| Na toca ao meio-dia | 9% | 10% |
+| Desesperados (energia de 30 ou menos) | 30% | 26% |
+| Variação dos coelhos em cada seed | 3,9% | 8,8% |
+
+As caçadas por hora não mudaram. A variação é o desvio-padrão do número de coelhos a dividir pela média, em cada seed.
+
+**Como lá chegámos.** Antes de chegar à regra final, testei cinco formas que não ficaram:
+
+| Forma | Coelhos | Raposas | O que correu mal |
+|---|---|---|---|
+| De noite, acima de 50, recolhe-se na toca sem recuperar | 5 | 1,0 | colapso (1 564 migrações) |
+| De noite pasta a até 2 células de uma toca | 263 | 8,8 | 16 990 mortos à fome, e só baixou a distância às tocas de 2,7 para 2,5 |
+| Acima de 40 descansa e recupera 0 por hora | 5 | 1,5 | colapso (949 migrações) |
+| Acima de 40 descansa e recupera 1,5 por hora, sem teto | 283 | 10,5 | ver abaixo |
+| Descansa e recupera só até 50 a 70, e fica na toca | 6 a 13 | | colapso |
+
+A forma sem teto parecia boa, mas criava três problemas:
+
+- **A energia deixava de vir só da comida.** Descansar dava energia que chegava para ter crias, e a seguir a um choque a população disparava (376 coelhos em vez de 314).
+- **Os coelhos oscilavam mais.** A variação subia para 9,8%, e havia seeds a cair para 118 coelhos.
+- **Os coelhos ficavam mais esfomeados.** Os desesperados passavam de 30% para 43%. Um coelho desesperado ignora as ameaças, por isso o jogador passava a afastar só metade dos animais: 39 à vista com ele contra 58 sem ele (antes, 39 contra 97). O teste `o_jogador_afasta_os_animais` falhava por isso, e não por ruído da seed 8.
+
+O teto dos 60 resolveu as crias e os desesperados, porque um coelho tem de comer para passar dos 60 aos 80. Mas a oscilação ficou maior do que antes. Vem de esconder os coelhos à hora em que as raposas caçam: o sistema predador-presa fica mais solto. **Há seeds que descem até 146 a 180 coelhos durante semanas.** Para o jogo, isto quer dizer períodos de escassez que antes não havia. Fica registado como uma consequência que aceitámos de propósito.
+
+**A região agregada ganhou um estado novo: a reserva.**
+
+- **A vegetação deixou de prever as crias.** Com o descanso, a seguir a um choque havia o triplo das crias com a mesma vegetação. A erva por coelho e a energia média também não serviam: a energia média só subia de 44 para 49.
+- **O que as prevê é a reserva:** a fração dos coelhos com 60 ou mais de energia, que já não descansam e estão a caminho de ter uma cria.
+- **Os valores medidos:** a reserva é de 11 a 14% em equilíbrio. A seguir a um choque sobe para 28% em 4 dias, e as crias por adulto passam de 0,013 para 0,08.
+- **Na agregada:** a reserva caminha 30% por dia para um valor que depende da erva por coelho (`reserve_target`), e as crias dependem da reserva (`births`).
+- **Na conversão:** ao converter para animais individuais, a energia é sorteada de cima ou de baixo dos 60 para respeitar a reserva.
+
+Também voltei a medir as outras tabelas do coelho:
+- a fome;
+- a energia;
+- os coelhos na toca, que passam a ser 24%, porque a conversão é à meia-noite;
+- o `grazing`, que passa a 3,3.
+
+Para medir apenas o equilíbrio, aproveitei só os dias de equilíbrio. Para medir os choques, cortei a meio os coelhos a cada 150 dias.
+
+| | Completa | Agregada |
+|---|---|---|
+| Coelhos (dias 500 a 900) | 264 | 264 |
+| Raposas | 10,3 | 11,0 |
+| Vegetação | 4,78 | 4,69 |
+| 21 dias depois de perder metade dos coelhos | 314 | 285 |
+
+**No jogo:**
+- **Os coelhos na toca deixaram de se desenhar** (`visible_rabbits`). Antes desenhavam-se por cima da toca, por isso, ao testar, não se viam coelhos a desaparecer de noite, apesar de o contador baixar.
+- **A noite tem dois picos de movimento:** às 21h, quando escurece, 34% dos coelhos mudam de célula (a correr para as tocas, ou a fugir das raposas que saem), e às 6h 23% (a sair das tocas). De dia são 12%, e a meio da noite 9 a 13%. Por isso a noite parece mais ativa.
+- **O contador baixa de noite** porque quase todas as caçadas são às 21h, 22h e 23h, e as crias nascem espalhadas pelo dia.
+
+**Nenhum limite de teste mudou.** Passam os 15% do choque, os 1,5 da cabana e o teste do jogador (26 animais à vista com ele contra 53 sem ele).
+
+**Testes novos:**
+- no coelho: `de_noite_descansa_na_toca_e_recupera`, `de_noite_vai_para_a_toca_descansar`, `de_noite_com_pouca_energia_continua_a_comer`, `de_noite_acima_do_teto_vai_comer` e `de_dia_nao_descansa`;
+- na simulação: `de_noite_ha_mais_coelhos_na_toca`.
+
+**O que se aprendeu:**
+1. **Medir a folga antes do comportamento.** O coelho vive à justa, e nenhum chega aos 90 de `full_energy`. Qualquer hora sem comer custa-lhe crias.
+2. **Energia de graça desliga a população da comida.** Ela dispara e depois morre à fome.
+3. **Uma média pode esconder o que interessa.** As crias vêm da cauda de cima da energia (a reserva), não da energia média.
+4. **Um teste que falha "por uma seed" merece ser seguido.** O do jogador mostrava um problema real: metade dos coelhos tinha deixado de fugir.
+
+**Próximo passo:** o resto da etapa 6 (inventário, recolha, ferramentas, crafting e abrigo).
+
 ## 2026-11-02 (segunda-feira)
 
 **O que foi feito**

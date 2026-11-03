@@ -523,6 +523,9 @@ impl Simulation {
         fox_params.hunt_below += (fox_params.day_hunt_below - fox_params.hunt_below) * light;
         let mut rabbit_params = self.config.rabbit.clone();
         rabbit_params.vision = daylight::vision(rabbit_params.vision, rabbit_params.night_vision, light);
+        if light < 0.5 {
+            rabbit_params.rest_above = rabbit_params.night_rest_above;
+        }
 
         // Primeiro as raposas: caçam e marcam os coelhos apanhados como `eaten`.
         // As posições no início do tick servem para contar rivais perto (travão de densidade).
@@ -1058,6 +1061,33 @@ mod tests {
         }
         assert!(total > 100, "só {total} caçadas");
         assert!(dia * 20 < total, "{dia} de {total} caçadas foram de dia");
+    }
+
+    /// GDD 7.1: de noite, os coelhos com energia entre `night_rest_above` e
+    /// `rest_cap` descansam na toca. Há mais do dobro dos coelhos escondidos
+    /// à meia-noite do que ao meio-dia (medido: 24% contra 9%).
+    #[test]
+    fn de_noite_ha_mais_coelhos_na_toca() {
+        let (mut noite, mut dia) = (0.0, 0.0);
+        let escondidos = |sim: &Simulation| {
+            let n = sim.rabbits.iter().filter(|r| sim.world.is_burrow(r.x, r.y)).count();
+            n as f32 / sim.rabbits.len().max(1) as f32
+        };
+        for seed in 1..=5 {
+            let mut sim = Simulation::warmed_up(Config {
+                seed,
+                ..Config::default()
+            });
+            for _ in 0..30 * TICKS_PER_DAY {
+                sim.step();
+                match sim.tick() % TICKS_PER_DAY {
+                    0 => noite += escondidos(&sim),
+                    12 => dia += escondidos(&sim),
+                    _ => {}
+                }
+            }
+        }
+        assert!(noite > 2.0 * dia, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
     }
 
     /// A medição do teste da cabana funciona: com cabana há visitas, sem
