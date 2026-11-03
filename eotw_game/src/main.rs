@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
-use eotw_sim::landscape::{Landscape, REGION};
+use eotw_sim::landscape::{Landscape, REGION, WINDOW_MARGIN};
 use eotw_sim::{CabinParams, Config, Scent, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
@@ -35,10 +35,10 @@ const LANDSCAPE_REGIONS: usize = 5;
 /// Células desenhadas à volta do jogador, de lado a lado e de cima a baixo.
 /// Chegam para encher a parte da janela à direita do painel (630 x 720
 /// píxeis, 25 x 28 células) e ficam dentro da janela simulada, que vai pelo
-/// menos 24 células para cada lado do jogador.
+/// menos `WINDOW_MARGIN` (20) células para cada lado do jogador.
 const VIEW_W: usize = 27;
 const VIEW_H: usize = 31;
-const _: () = assert!(VIEW_W / 2 <= REGION && VIEW_H / 2 <= REGION);
+const _: () = assert!(VIEW_W / 2 <= WINDOW_MARGIN && VIEW_H / 2 <= WINDOW_MARGIN);
 
 /// Tempo entre passos do jogador com a tecla carregada, em segundos.
 const PLAYER_STEP_SECS: f32 = 0.12;

@@ -10,9 +10,11 @@
 //! - as que ficam guardam cada animal tal como estava, e também a vegetação
 //!   e o cheiro.
 //!
-//! O jogador está sempre na região do meio, por isso a margem da janela, onde
-//! as regiões entram e saem, fica a 24 células ou mais dele: nada aparece nem
-//! desaparece à frente dele.
+//! A janela só se desloca quando o jogador já entrou `HYSTERESIS` células
+//! na região nova. Assim, andar para trás e para a frente em cima de uma
+//! fronteira não desloca a janela a cada passo. A margem da janela, onde as
+//! regiões entram e saem, fica sempre a `WINDOW_MARGIN` células ou mais
+//! dele: nada aparece nem desaparece à frente dele.
 //!
 //! Uma vez por dia, alguns animais passam para as regiões vizinhas, à taxa
 //! medida na completa (`rabbits_cross` e `foxes_cross`). É isso que deixa uma
@@ -31,6 +33,16 @@ pub const REGION: usize = MIN_REGION_SIZE;
 
 /// Quantas regiões há à volta da do jogador, para cada lado, na janela.
 const WINDOW_REACH: usize = 1;
+
+/// Quantas células o jogador pode entrar numa região vizinha sem a janela
+/// se deslocar. Sem isto, quem andasse em cima de uma fronteira deslocava a
+/// janela a cada passo: cada deslocamento custa 0,6 ms e agrega e expande
+/// as regiões que saem e entram.
+const HYSTERESIS: usize = 4;
+
+/// O jogador fica sempre a esta distância ou mais da margem da janela (a
+/// não ser junto às margens da paisagem, onde já não há mais nada).
+pub const WINDOW_MARGIN: usize = REGION - HYSTERESIS;
 
 /// Os animais que passam da janela para uma região agregada saem desta faixa
 /// junto à fronteira, e os que chegam aparecem nela.
@@ -78,6 +90,9 @@ pub struct Landscape {
     window: Window,
     /// O jogador, em células da paisagem inteira.
     player: (usize, usize),
+    /// A região no meio da janela. É a do jogador, a não ser que ele tenha
+    /// entrado há pouco numa vizinha (ver `HYSTERESIS`).
+    centre: (usize, usize),
     /// A cabana, em células da paisagem inteira. Só existe na simulação
     /// quando a sua região está na janela.
     cabin: Option<CabinParams>,
@@ -138,6 +153,7 @@ impl Landscape {
             regions,
             window: empty,
             player,
+            centre: (player.0 / REGION, player.1 / REGION),
             cabin,
             rng,
             events: Vec::new(),
@@ -212,13 +228,19 @@ impl Landscape {
     }
 
     /// Anda uma célula na direção (dx, dy), sem sair da paisagem. Se o
-    /// jogador mudar de região, a janela desloca-se com ele.
+    /// jogador entrar mais de `HYSTERESIS` células numa região vizinha, a
+    /// janela desloca-se para ficar com a região dele no meio.
     pub fn move_player(&mut self, dx: i32, dy: i32) {
         let (x, y) = self.player;
         let nx = (x as i32 + dx).clamp(0, (self.cols * REGION) as i32 - 1) as usize;
         let ny = (y as i32 + dy).clamp(0, (self.rows * REGION) as i32 - 1) as usize;
         self.player = (nx, ny);
-        if (x / REGION, y / REGION) != (nx / REGION, ny / REGION) {
+        let outside = |p: usize, c: usize| {
+            let (start, end) = (c * REGION, (c + 1) * REGION);
+            start.saturating_sub(p).max((p + 1).saturating_sub(end))
+        };
+        if outside(nx, self.centre.0).max(outside(ny, self.centre.1)) > HYSTERESIS {
+            self.centre = (nx / REGION, ny / REGION);
             self.open_window();
         } else {
             self.place_player_in_window();
@@ -248,10 +270,9 @@ impl Landscape {
         self.window.sim.place_player(Some((self.player.0 - ox, self.player.1 - oy)));
     }
 
-    /// As regiões da janela à volta do jogador: a dele e as vizinhas que
-    /// existem.
+    /// As regiões da janela: a do meio e as vizinhas que existem.
     fn window_bounds(&self) -> (usize, usize, usize, usize) {
-        let (px, py) = (self.player.0 / REGION, self.player.1 / REGION);
+        let (px, py) = self.centre;
         let rx = px.saturating_sub(WINDOW_REACH);
         let ry = py.saturating_sub(WINDOW_REACH);
         let rx1 = (px + WINDOW_REACH).min(self.cols - 1);
@@ -627,7 +648,9 @@ mod tests {
         let ficam = |a: &(usize, usize, u64, u32, bool)| (REGION..3 * REGION).contains(&a.0) && a.1 < 3 * REGION;
         let ficavam: Vec<_> = animais(&l).into_iter().filter(ficam).collect();
         assert_eq!((ox, oy), (0, 0));
-        l.move_player(1, 0);
+        for _ in 0..=HYSTERESIS {
+            l.move_player(1, 0);
+        }
         assert_eq!(l.window_origin(), (REGION, 0), "a janela devia ter andado uma região");
         assert_eq!(l.totals(), antes);
         let ficaram: Vec<_> = animais(&l).into_iter().filter(ficam).collect();
@@ -661,6 +684,56 @@ mod tests {
             l.step();
         }
         assert!(deslocamentos >= 4, "a volta devia ter deslocado a janela várias vezes ({deslocamentos})");
+    }
+
+    /// Andar para trás e para a frente em cima de uma fronteira não desloca
+    /// a janela. Só se desloca quando o jogador entra mais de `HYSTERESIS`
+    /// células na região nova, e depois o mesmo vale para voltar.
+    #[test]
+    fn andar_em_cima_da_fronteira_nao_desloca_a_janela() {
+        let mut l = paisagem(4, 4, (2 * REGION - 1, 36));
+        let janela = l.window_origin();
+        for _ in 0..10 {
+            for _ in 0..HYSTERESIS {
+                l.move_player(1, 0);
+            }
+            for _ in 0..HYSTERESIS {
+                l.move_player(-1, 0);
+            }
+            assert_eq!(l.window_origin(), janela);
+        }
+        // Mais uma célula e a janela desloca-se.
+        for _ in 0..=HYSTERESIS {
+            l.move_player(1, 0);
+        }
+        assert_eq!(l.window_origin(), (janela.0 + REGION, janela.1));
+        // De volta à fronteira, do outro lado, não se desloca outra vez.
+        for _ in 0..=HYSTERESIS {
+            l.move_player(-1, 0);
+        }
+        assert_eq!(l.player().0, 2 * REGION - 1);
+        assert_eq!(l.window_origin(), (janela.0 + REGION, janela.1));
+    }
+
+    /// O jogador nunca fica a menos de `WINDOW_MARGIN` células da margem da
+    /// janela, a não ser junto às margens da paisagem.
+    #[test]
+    fn o_jogador_fica_longe_da_margem_da_janela() {
+        let lado = 5;
+        let mut l = paisagem(5, lado, (60, 60));
+        let mut rng = Rng::new(9);
+        for _ in 0..3000 {
+            let (dx, dy) = [(1, 0), (-1, 0), (0, 1), (0, -1)][rng.range_usize(4)];
+            l.move_player(dx, dy);
+            let (ox, oy) = l.window_origin();
+            let (w, h) = (l.window_sim().world.width, l.window_sim().world.height);
+            let (px, py) = l.player();
+            let fim = lado * REGION;
+            assert!(ox == 0 || px - ox >= WINDOW_MARGIN, "perto da margem esquerda em {:?}", l.player());
+            assert!(oy == 0 || py - oy >= WINDOW_MARGIN, "perto da margem de cima em {:?}", l.player());
+            assert!(ox + w == fim || ox + w - 1 - px >= WINDOW_MARGIN, "perto da margem direita em {:?}", l.player());
+            assert!(oy + h == fim || oy + h - 1 - py >= WINDOW_MARGIN, "perto da margem de baixo em {:?}", l.player());
+        }
     }
 
     /// A mesma seed e os mesmos passos dão a mesma paisagem.

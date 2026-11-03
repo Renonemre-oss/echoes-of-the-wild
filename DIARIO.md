@@ -88,7 +88,24 @@ Os marcos 5 a 10 e o 16 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 **Teste em jogo:** a jogar normalmente, com vsync, a Intel deu 176 a 180 frames por segundo, sem lag. A NVIDIA ficou nos 20 frames por segundo, muito pior do que nas medições sem vsync. Fica confirmado que a Intel é a escolha certa por omissão. A NVIDIA só volta a ser opção se o controlador NVK melhorar.
 
-**Próximo passo:** os pontos que ainda estão em aberto: histerese nas fronteiras, falhas no rasto a velocidade baixa, determinismo de `exp` entre plataformas e mais raposas por região na janela.
+### Histerese nas fronteiras ↔️
+
+**O problema:** a janela deslocava-se logo que o jogador mudava de região. Quem andasse para trás e para a frente em cima de uma fronteira fazia a janela andar a cada passo. Em cada deslocamento, as regiões que saem são agregadas e as que entram são expandidas: custa cerca de 0,6 ms e baralha os animais dessas regiões sem necessidade.
+
+**A solução:** a janela guarda a região do meio (`centre`) e só se desloca quando o jogador já entrou mais de 4 células (`HYSTERESIS`) numa região vizinha. Para voltar atrás, vale o mesmo. Em troca, o jogador pode ficar 4 células mais perto da margem da janela: a margem fica agora a 20 células ou mais dele (`WINDOW_MARGIN`), em vez de 24. Continua a ser mais do que as 8 de `SPAWN_CLEAR_RADIUS` e do que meia vista do jogo (15 células), o que é verificado ao compilar.
+
+**Medição** (2000 passos ao acaso, numa paisagem de 5x5 regiões):
+
+| | Deslocamentos antes | Deslocamentos agora |
+|---|---|---|
+| passeio ao acaso | 42 | 7 |
+| para trás e para a frente, a começar em cima de uma fronteira | 105 | 13 |
+
+**Testes novos:**
+- `andar_em_cima_da_fronteira_nao_desloca_a_janela`: 4 passos para lá e 4 para cá, 10 vezes, e a janela não se mexe; com o quinto passo desloca-se, e não volta para trás ao regressar à fronteira.
+- `o_jogador_fica_longe_da_margem_da_janela`: em 3000 passos ao acaso, o jogador nunca fica a menos de 20 células da margem da janela (a não ser nas margens da paisagem).
+
+**Próximo passo:** os pontos que ainda estão em aberto: falhas no rasto a velocidade baixa, determinismo de `exp` entre plataformas e mais raposas por região na janela.
 
 ---
 
