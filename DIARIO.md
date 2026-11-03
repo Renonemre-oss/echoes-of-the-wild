@@ -21,9 +21,74 @@ As entradas mais recentes ficam no topo. Quando um marco acontece, passa a ✅ n
 | 8 | Perceção por cheiro a funcionar | ✅ | 2026-11-02 |
 | 9 | Teste da cabana em modo texto | ✅ | 2026-11-02 |
 | 10 | Primeira janela com Bevy (etapa 4) | ✅ | 2026-11-02 |
-| 11 | Prototype 01 completo | ⬜ | |
+| 11 | O jogador no mundo: os animais fogem dele e do rasto que deixa | ✅ | 2026-11-02 |
+| 12 | Performance medida: o mapa de 192x192 cinco vezes mais rápido | ✅ | 2026-11-02 |
+| 13 | Região agregada com o mesmo equilíbrio da simulação completa | ✅ | 2026-11-02 |
+| 14 | Mundo com várias regiões e animais a passar entre elas | ✅ | 2026-11-02 |
+| 15 | Primeira paisagem a andar: a câmara segue o jogador por 25 regiões | ✅ | 2026-11-02 |
+| 16 | Prototype 01 completo | ⬜ | |
 
-Os marcos 5 a 11 seguem o plano da secção 19 do GDD e podem mudar.
+Os marcos 5 a 10 e o 16 seguem o plano da secção 19 do GDD e podem mudar. Os marcos 11 a 15 foram acrescentados depois, para o trabalho que veio a seguir à primeira janela.
+
+---
+
+## 2026-11-03 (terça-feira)
+
+**O que foi feito**
+
+- O painel de marcos estava parado no marco 10, apesar de o jogador, a performance e a paisagem terem entradas próprias. Ganharam marcos: do 11 ao 15. O "Prototype 01 completo" passou a ser o 16.
+
+**Marcos** 🎉
+
+- Marco 11: **o jogador no mundo**. Os coelhos e as raposas fogem dele, e as raposas evitam o rasto que ele deixa. 🧍
+- Marco 12: **performance medida**. O mapa de 192x192 passou de 15 ms para 3 ms por tick, com resultados iguais byte a byte. ⏱️
+- Marco 13: **região agregada**. Reproduz o equilíbrio da completa (281 coelhos contra 276) e recupera de choques à mesma velocidade. 📊
+- Marco 14: **mundo com várias regiões**. Os animais passam de região em região, e uma região vazia volta a encher-se. 🗺️
+- Marco 15: **primeira paisagem a andar**. A câmara segue o jogador por 25 regiões, e o que ele vê é sempre simulado animal a animal. 🎥
+
+**Próximo passo:** correr `cargo run --release -p eotw_game`, atravessar fronteiras de região e ver se há soluços, animais a aparecer ou a desaparecer à vista, e como corre a 240 horas por segundo.
+
+### O lag da paisagem 🐢→🐇
+
+**O que viste:** lag no jogo em release, mesmo em pausa e parado. Por isso a causa não era a simulação.
+
+**Como se encontrou a causa.**
+- **Uma opção para medir:** o jogo ganhou a opção `--frames N`. Corre N frames sem esperar pelo ecrã, escreve a mediana e o pior tempo por frame, e sai.
+- **Desligar um sistema de cada vez:** desliguei cada sistema de desenho à vez, e apareceram duas causas.
+
+**Causa 1: os animais eram apagados e criados em cada frame.**
+- **O que acontecia:** em cada frame, o jogo apagava e voltava a criar uma entidade do Bevy por cada coelho, raposa e toca à vista. Com centenas de coelhos, isso levava a maior parte do frame: 22 ms de mediana, contra 5 ms sem desenhar os animais.
+- **Correção:** os sprites passaram a ser sempre os mesmos. Em cada frame mudam de sítio, cor e tamanho, e os que sobram escondem-se, como já se fazia com os quadrados do chão.
+- **Mexer só no que mudou:** os quadrados e o texto do painel também só se alteram quando mudam, porque cada alteração obriga o Bevy a voltar a enviar tudo para a placa gráfica.
+- **Teste:** `os_sprites_dos_animais_reaproveitam_se`.
+
+**Causa 2: a placa NVIDIA tinha soluços próprios.**
+- **O que acontecia:** a MX250, com o controlador NVK, tinha um soluço de cerca de 33 ms a cada 20 frames, mesmo sem nada para desenhar.
+- **Correção:** a placa Intel integrada não tem esses soluços, e para um jogo 2D chega bem. O jogo passou a escolhê-la por omissão. Com `WGPU_POWER_PREF=high` usa-se a NVIDIA.
+
+**Resultado** (release, 240 horas por segundo, 1800 frames):
+
+| | Frame mediana | 95% dos frames abaixo de | Pior frame |
+|---|---|---|---|
+| antes (NVIDIA, sprites novos em cada frame) | 17 a 22 ms | 32 ms | 43 ms |
+| sprites reaproveitados, NVIDIA | 7,2 ms | 32 ms | 34 ms |
+| sprites reaproveitados, Intel (por omissão) | 3,9 ms | 5,2 ms | 7,9 ms |
+
+**Também mudou no jogo:**
+- **O painel mostra a performance:** os frames por segundo e o pior tempo da simulação, renovados duas vezes por segundo.
+- **`--speed N`:** começa a N horas de jogo por segundo.
+- **Capturas de ecrã:** passaram a esperar 2 segundos em vez de 30 frames. Em release, 30 frames passavam antes de a letra carregar.
+
+![A paisagem com o painel de performance](docs/janela_paisagem.png)
+
+**O que se aprendeu**
+
+1. **Medir antes de adivinhar.** Pela medição feita sem janela, a simulação gastava 1,4 ms por frame, por isso o lag tinha de estar no desenho. Mas só desligar cada parte mostrou que eram duas causas, e que uma delas nem era do nosso código.
+2. **Criar e apagar entidades é caro no Bevy.** Mudar uma entidade que já existe é muito mais barato.
+
+**Teste em jogo:** a jogar normalmente, com vsync, a Intel deu 176 a 180 frames por segundo, sem lag. A NVIDIA ficou nos 20 frames por segundo, muito pior do que nas medições sem vsync. Fica confirmado que a Intel é a escolha certa por omissão. A NVIDIA só volta a ser opção se o controlador NVK melhorar.
+
+**Próximo passo:** os pontos que ainda estão em aberto: histerese nas fronteiras, falhas no rasto a velocidade baixa, determinismo de `exp` entre plataformas e mais raposas por região na janela.
 
 ---
 

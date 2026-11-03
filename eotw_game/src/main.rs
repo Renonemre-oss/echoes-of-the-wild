@@ -13,9 +13,13 @@
 //!   cargo run -p eotw_game -- --seed 7 --cabin
 //!   cargo run -p eotw_game -- --screenshot janela.png
 //!   cargo run -p eotw_game -- --smell   (começa com a vista do cheiro ligada)
+//!   cargo run --release -p eotw_game -- --frames 600   (mede o tempo por frame e sai)
+//!   cargo run --release -p eotw_game -- --speed 240     (começa a 240 horas por segundo)
 
 use bevy::prelude::*;
+use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
+use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Landscape, REGION};
 use eotw_sim::{CabinParams, Config, Scent, TICKS_PER_DAY};
 
@@ -59,30 +63,60 @@ fn main() {
     let land = Landscape::new(config, LANDSCAPE_REGIONS, LANDSCAPE_REGIONS, start);
 
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+        .add_plugins(
+            DefaultPlugins
+                .set(render_plugin())
+                .set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Echoes of the Wild".into(),
                 resolution: (960.0_f32, 720.0_f32).into(),
+                // A medir, sem esperar pelo ecrã: vê-se quanto o frame custa a sério.
+                present_mode: if options.frames.is_some() {
+                    bevy::window::PresentMode::AutoNoVsync
+                } else {
+                    bevy::window::PresentMode::AutoVsync
+                },
                 ..default()
             }),
             ..default()
-        }))
+        }),
+        )
         .insert_resource(ClearColor(Color::srgb(0.10, 0.11, 0.10)))
         .insert_resource(World(land))
         .insert_resource(Clock {
-            speed: 3,
+            // O ritmo de `SPEEDS` mais perto do pedido com `--speed`.
+            speed: (0..SPEEDS.len())
+                .min_by(|&a, &b| (SPEEDS[a] - options.speed).abs().total_cmp(&(SPEEDS[b] - options.speed).abs()))
+                .unwrap_or(3),
             paused: false,
             pending: 0.0,
         })
         .insert_resource(options.clone())
         .insert_resource(Walk { cooldown: 0.0 })
         .insert_resource(SmellView(smell))
+        .init_resource::<Perf>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (controls, walk, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot).chain(),
+            (controls, walk, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot, measure).chain(),
         )
         .run();
+}
+
+/// A placa gráfica a usar. Num portátil com duas, a integrada por omissão:
+/// para um jogo 2D chega bem, e neste portátil a NVIDIA (MX250 com o
+/// controlador NVK) dava um soluço de 33 ms a cada 20 frames, mesmo sem nada
+/// para desenhar. A Intel integrada fica abaixo de 7 ms no pior frame. Com
+/// `WGPU_POWER_PREF=high` usa-se a outra.
+fn render_plugin() -> RenderPlugin {
+    let mut settings = WgpuSettings::default();
+    if std::env::var("WGPU_POWER_PREF").is_err() {
+        settings.power_preference = PowerPreference::LowPower;
+    }
+    RenderPlugin {
+        render_creation: RenderCreation::Automatic(settings),
+        ..default()
+    }
 }
 
 /// Opções da linha de comandos.
@@ -94,6 +128,10 @@ struct Options {
     smell: bool,
     /// Guardar uma imagem da janela e sair (útil para o diário e para testes).
     screenshot: Option<String>,
+    /// Correr este número de frames, escrever quanto demoraram e sair.
+    frames: Option<u32>,
+    /// Horas de jogo por segundo ao começar (uma das de `SPEEDS`).
+    speed: f32,
 }
 
 impl Options {
@@ -103,6 +141,8 @@ impl Options {
             cabin: false,
             smell: false,
             screenshot: None,
+            frames: None,
+            speed: 24.0,
         };
         let args: Vec<String> = std::env::args().skip(1).collect();
         let mut i = 0;
@@ -117,6 +157,14 @@ impl Options {
                 "--screenshot" => {
                     i += 1;
                     o.screenshot = args.get(i).cloned();
+                }
+                "--speed" => {
+                    i += 1;
+                    o.speed = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(o.speed);
+                }
+                "--frames" => {
+                    i += 1;
+                    o.frames = args.get(i).and_then(|v| v.parse().ok());
                 }
                 other => eprintln!("Argumento desconhecido (ignorado): {other}"),
             }
@@ -138,6 +186,20 @@ struct Clock {
     paused: bool,
     /// Fração de tick que ainda falta correr (o tempo real não chega em ticks certos).
     pending: f32,
+}
+
+/// Quanto tempo a simulação gastou no último frame (para o painel e `--frames`).
+#[derive(Resource, Default)]
+struct Perf {
+    sim_ms: f32,
+    /// O que o painel mostra: frames por segundo e o pior tempo da
+    /// simulação, renovados duas vezes por segundo (mudar o texto em cada
+    /// frame também custa).
+    fps: f32,
+    sim_peak: f32,
+    frames: u32,
+    elapsed: f32,
+    peak: f32,
 }
 
 /// O ritmo a que o jogador anda com uma tecla carregada.
@@ -291,8 +353,10 @@ fn walk(
 }
 
 /// Corre os ticks que couberem no tempo real que passou.
-fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>) {
+fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>, mut perf: ResMut<Perf>) {
+    let start = std::time::Instant::now();
     if clock.paused {
+        perf.sim_ms = 0.0;
         return;
     }
     clock.pending += time.delta_secs() * SPEEDS[clock.speed];
@@ -302,6 +366,7 @@ fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>) 
     for _ in 0..ticks {
         world.0.step();
     }
+    perf.sim_ms = start.elapsed().as_secs_f32() * 1000.0;
 }
 
 /// A câmara segue o jogador. Fica desviada para a esquerda, para o jogador
@@ -326,20 +391,24 @@ fn draw_tiles(
     for (tile, mut sprite, mut transform, mut visible) in &mut tiles {
         let cell = tile_cell(tile.0, player);
         let pos = cell_to_screen(cell.0, cell.1);
-        transform.translation = pos.extend(0.0);
+        // Só se mexe no que mudou: cada alteração obriga o Bevy a voltar a
+        // enviar o sprite para a placa gráfica.
+        transform.set_if_neq(Transform::from_translation(pos.extend(0.0)));
         // Fora da paisagem não há nada para desenhar.
         let Some((x, y)) = in_window(land, cell) else {
-            *visible = Visibility::Hidden;
+            visible.set_if_neq(Visibility::Hidden);
             continue;
         };
-        *visible = Visibility::Visible;
+        visible.set_if_neq(Visibility::Visible);
         let mut color = vegetation_color(w.biomass_at(x, y) / w.capacity());
         if smell.0 {
             let human = w.scent.at(Scent::Human, x, y);
             let food = w.scent.at(Scent::Food, x, y);
             color = smell_tint(color, human, food);
         }
-        sprite.color = color;
+        if sprite.color != color {
+            sprite.color = color;
+        }
     }
 }
 
@@ -353,55 +422,89 @@ fn smell_tint(base: Color, human: f32, food: f32) -> Color {
     Color::srgb(rgb.x, rgb.y, rgb.z)
 }
 
-/// Apaga o que se desenhou no frame anterior por cima dos quadrados
-/// (tocas, cabana, animais, jogador) e desenha o que está agora à vista.
+/// Uma coisa a desenhar por cima dos quadrados: em que célula, com que
+/// desvio dentro dela, cor, tamanho e camada.
+struct Mark {
+    cell: (i64, i64),
+    offset: Vec2,
+    color: Color,
+    size: f32,
+    z: f32,
+}
+
+/// Uma marca no centro da célula.
+fn mark(cell: (i64, i64), color: Color, size: f32, z: f32) -> Mark {
+    Mark { cell, offset: Vec2::ZERO, color, size, z }
+}
+
+/// O que se desenha por cima dos quadrados (tocas, cabana, animais,
+/// jogador): os sprites são sempre os mesmos, e em cada frame mudam de
+/// sítio, cor e tamanho; os que sobram escondem-se. Antes, cada frame
+/// apagava e criava uma entidade por cada coisa à vista, e isso, com
+/// centenas de coelhos, levava a maior parte do frame (22 ms contra 5).
 fn draw_animals(
     mut commands: Commands,
     world: Res<World>,
-    old: Query<Entity, With<AnimalSprite>>,
+    mut pool: Query<(&mut Sprite, &mut Transform, &mut Visibility), With<AnimalSprite>>,
 ) {
-    for e in &old {
-        commands.entity(e).despawn();
-    }
     let land = &world.0;
     let sim = land.window_sim();
     let (ox, oy) = land.window_origin();
     let player = land.player();
     let global = |x: usize, y: usize| ((ox + x) as i64, (oy + y) as i64);
-    let mut put = |cell: (i64, i64), offset: Vec2, color: Color, size: f32, z: f32| {
-        if on_screen(cell, player) {
-            let pos = cell_to_screen(cell.0, cell.1) + offset;
-            commands.spawn((
-                Sprite::from_color(color, Vec2::splat(size)),
-                Transform::from_xyz(pos.x, pos.y, z),
-                AnimalSprite,
-            ));
-        }
-    };
+    let mut items: Vec<Mark> = Vec::new();
     for &(x, y) in sim.world.burrows() {
-        put(global(x, y), Vec2::ZERO, Color::srgb(0.20, 0.13, 0.08), CELL * 0.45, 1.0);
+        items.push(mark(global(x, y), Color::srgb(0.20, 0.13, 0.08), CELL * 0.45, 1.0));
     }
     if let Some(c) = land.cabin() {
-        put((c.x as i64, c.y as i64), Vec2::ZERO, Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5);
+        items.push(mark((c.x as i64, c.y as i64), Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5));
     }
     for (i, r) in sim.rabbits.iter().enumerate() {
         // Vários coelhos na mesma célula ficam ligeiramente desencontrados.
         let jitter = Vec2::new((i % 3) as f32 - 1.0, ((i / 3) % 3) as f32 - 1.0) * CELL * 0.22;
-        put(global(r.x, r.y), jitter, Color::srgb(0.93, 0.90, 0.82), CELL * 0.28, 2.0);
+        items.push(Mark {
+            offset: jitter,
+            ..mark(global(r.x, r.y), Color::srgb(0.93, 0.90, 0.82), CELL * 0.28, 2.0)
+        });
     }
     for f in &sim.foxes {
-        put(global(f.x, f.y), Vec2::ZERO, Color::srgb(0.90, 0.45, 0.12), CELL * 0.6, 3.0);
+        items.push(mark(global(f.x, f.y), Color::srgb(0.90, 0.45, 0.12), CELL * 0.6, 3.0));
     }
     // O jogador: um quadrado azul com contorno claro, para se ver bem.
     let me = (player.0 as i64, player.1 as i64);
-    put(me, Vec2::ZERO, Color::srgb(0.95, 0.95, 1.0), CELL * 0.8, 4.0);
-    put(me, Vec2::ZERO, Color::srgb(0.20, 0.45, 0.95), CELL * 0.62, 4.1);
+    items.push(mark(me, Color::srgb(0.95, 0.95, 1.0), CELL * 0.8, 4.0));
+    items.push(mark(me, Color::srgb(0.20, 0.45, 0.95), CELL * 0.62, 4.1));
+    items.retain(|m| on_screen(m.cell, player));
+
+    let mut sprites = pool.iter_mut();
+    for &Mark { cell, offset, color, size, z } in &items {
+        let pos = (cell_to_screen(cell.0, cell.1) + offset).extend(z);
+        match sprites.next() {
+            Some((mut sprite, mut transform, mut visible)) => {
+                let size = Some(Vec2::splat(size));
+                if sprite.color != color || sprite.custom_size != size {
+                    sprite.color = color;
+                    sprite.custom_size = size;
+                }
+                transform.set_if_neq(Transform::from_translation(pos));
+                visible.set_if_neq(Visibility::Visible);
+            }
+            // Faltam sprites: criam-se mais (aparecem no frame seguinte).
+            None => {
+                commands.spawn((Sprite::from_color(color, Vec2::splat(size)), Transform::from_translation(pos), AnimalSprite));
+            }
+        }
+    }
+    for (_, _, mut visible) in sprites {
+        visible.set_if_neq(Visibility::Hidden);
+    }
 }
 
 fn draw_panel(
     world: Res<World>,
     clock: Res<Clock>,
     smell: Res<SmellView>,
+    perf: Res<Perf>,
     mut panel: Query<&mut Text, With<Panel>>,
 ) {
     let land = &world.0;
@@ -419,9 +522,10 @@ fn draw_panel(
     // As últimas linhas do registo da cabana, se houver cabana.
     let log = sim.cabin_log.lines.iter().rev().take(3).rev();
     let log: String = log.map(|l| format!("\n{l}")).collect();
-    text.0 = format!(
+    let new = format!(
         "Echoes of the Wild\n\n\
-         Dia {}, {:02}h\n{state}, {} horas por segundo\n\n\
+         Dia {}, {:02}h\n{state}, {} horas por segundo\n\
+         {:.0} frames por segundo, simulação até {:.1} ms\n\n\
          Região {}, {} (de {} x {})\n\
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
          No mundo: {} coelhos, {} raposas\n\
@@ -432,6 +536,8 @@ fn draw_panel(
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
         SPEEDS[clock.speed],
+        perf.fps,
+        perf.sim_peak,
         land.player().0 / REGION,
         land.player().1 / REGION,
         land.cols,
@@ -445,27 +551,79 @@ fn draw_panel(
         if smell.0 { "ligado: azul é o teu rasto, amarelo a comida" } else { "desligado" },
         if log.is_empty() { String::new() } else { format!("\n\nCabana:{log}") },
     );
+    // Refazer o texto obriga a voltar a compor as letras: só quando muda.
+    if text.0 != new {
+        text.0 = new;
+    }
 }
 
-/// Com `--screenshot`, espera uns frames (para a janela estar desenhada),
-/// guarda a imagem e fecha.
+/// Conta os frames por segundo para o painel. Com `--frames N`, também
+/// conta o tempo de cada frame e, ao fim de N, escreve a
+/// mediana e o pior e sai. Os primeiros 30 frames não contam (a janela ainda
+/// está a abrir). `sim` é o tempo gasto a avançar a simulação.
+fn measure(
+    options: Res<Options>,
+    time: Res<Time<Real>>,
+    mut perf: ResMut<Perf>,
+    mut samples: Local<Vec<(f32, f32)>>,
+    mut exit: EventWriter<AppExit>,
+) {
+    perf.frames += 1;
+    perf.elapsed += time.delta_secs();
+    perf.peak = perf.peak.max(perf.sim_ms);
+    if perf.elapsed >= 0.5 {
+        perf.fps = perf.frames as f32 / perf.elapsed;
+        perf.sim_peak = perf.peak;
+        (perf.frames, perf.elapsed, perf.peak) = (0, 0.0, 0.0);
+    }
+    let Some(n) = options.frames else {
+        return;
+    };
+    samples.push((time.delta_secs() * 1000.0, perf.sim_ms));
+    if samples.len() as u32 == n + 30 {
+        let mut frame: Vec<f32> = samples[30..].iter().map(|s| s.0).collect();
+        let mut sim: Vec<f32> = samples[30..].iter().map(|s| s.1).collect();
+        frame.sort_by(f32::total_cmp);
+        sim.sort_by(f32::total_cmp);
+        let at = |v: &[f32], q: f32| v[((v.len() - 1) as f32 * q) as usize];
+        println!(
+            "{n} frames: frame mediana {:.1} ms ({:.0} fps), p95 {:.1} ms, pior {:.1} ms | simulação mediana {:.2} ms, pior {:.2} ms",
+            at(&frame, 0.5),
+            1000.0 / at(&frame, 0.5),
+            at(&frame, 0.95),
+            at(&frame, 1.0),
+            at(&sim, 0.5),
+            at(&sim, 1.0)
+        );
+        exit.write(AppExit::Success);
+    }
+}
+
+/// Com `--screenshot`, espera 2 segundos (para a janela estar desenhada e
+/// a letra carregada), guarda a imagem e fecha. Contar frames não chegava:
+/// em release, 30 frames passavam antes de a letra do painel carregar.
 fn screenshot(
     mut commands: Commands,
     options: Res<Options>,
-    mut frames: Local<u32>,
+    time: Res<Time<Real>>,
+    mut taken: Local<Option<f32>>,
     mut exit: EventWriter<AppExit>,
 ) {
     let Some(path) = &options.screenshot else {
         return;
     };
-    *frames += 1;
-    if *frames == 30 {
-        commands
-            .spawn(Screenshot::primary_window())
-            .observe(save_to_disk(path.clone()));
-    }
-    if *frames == 60 {
-        exit.write(AppExit::Success);
+    let now = time.elapsed_secs();
+    match *taken {
+        None if now >= 2.0 => {
+            commands
+                .spawn(Screenshot::primary_window())
+                .observe(save_to_disk(path.clone()));
+            *taken = Some(now);
+        }
+        Some(at) if now >= at + 1.0 => {
+            exit.write(AppExit::Success);
+        }
+        _ => {}
     }
 }
 
@@ -590,6 +748,31 @@ mod tests {
             let jogador = cell_to_screen(6 + passo, 5);
             assert_eq!((t.x, t.y), (jogador.x - PANEL_WIDTH / 2.0, jogador.y));
         }
+    }
+
+    /// Os sprites dos animais reaproveitam-se: depois do primeiro frame não
+    /// se criam mais, e há um visível por cada coisa à vista.
+    #[test]
+    fn os_sprites_dos_animais_reaproveitam_se() {
+        let mut app = App::new();
+        app.insert_resource(World(paisagem((12, 12)))).add_systems(Update, draw_animals);
+        let contar = |app: &mut App| {
+            let mut q = app.world_mut().query_filtered::<&Visibility, With<AnimalSprite>>();
+            let todos: Vec<Visibility> = q.iter(app.world()).copied().collect();
+            (todos.len(), todos.iter().filter(|v| **v == Visibility::Visible).count())
+        };
+        app.update(); // cria os sprites
+        app.update(); // usa-os
+        let (criados, visiveis) = contar(&mut app);
+        assert!(visiveis > 2, "devia haver animais à vista, além do jogador");
+        assert_eq!(criados, visiveis);
+        // A simulação avança e os animais mudam: os sprites continuam os mesmos.
+        app.world_mut().resource_mut::<World>().0.run_days(2);
+        app.update();
+        app.update();
+        let (depois, visiveis) = contar(&mut app);
+        assert!(depois <= criados.max(visiveis), "criou sprites a mais: {criados} → {depois}");
+        assert!(depois >= visiveis);
     }
 
     /// Os quadrados mostram a vegetação da célula por baixo, com o jogador
