@@ -48,6 +48,13 @@ pub const WINDOW_MARGIN: usize = REGION - HYSTERESIS;
 /// junto à fronteira, e os que chegam aparecem nela.
 const BORDER_STRIP: usize = 4;
 
+/// Quantos dias a paisagem corre, só com regiões agregadas, antes de o
+/// jogador chegar. As raposas só chegam ao equilíbrio depois de a primeira
+/// geração morrer de velhice (400 dias): sem isto, o jogo começava com 4
+/// raposas por região em vez de 10 ou 11. Agregadas, as 25 regiões do jogo
+/// correm estes dias em cerca de 100 ms.
+pub const WARMUP_DAYS: u64 = 600;
+
 /// As sequências de números ao acaso da paisagem (ver `Rng::derived`).
 const STREAM_START: u64 = 11;
 const STREAM_REGION: u64 = 12;
@@ -107,7 +114,8 @@ pub struct Landscape {
 impl Landscape {
     /// Uma paisagem de `cols` x `rows` regiões, com o jogador em `player`.
     /// Cada região começa como um mundo de 24x24 aquecido, com a sua própria
-    /// seed, e é logo agregada; depois expande-se a janela à volta do jogador.
+    /// seed, e é logo agregada. Depois a paisagem corre `WARMUP_DAYS` dias
+    /// agregada, e só então se expande a janela à volta do jogador.
     /// Uma cabana em `config.cabin` fica nessas células da paisagem inteira.
     pub fn new(config: Config, cols: usize, rows: usize, player: (usize, usize)) -> Self {
         let cabin = config.cabin.clone();
@@ -159,6 +167,14 @@ impl Landscape {
             events: Vec::new(),
             crossings: 0,
         };
+        // Sem janela ainda, todas as regiões são agregadas.
+        for _ in 0..WARMUP_DAYS {
+            for r in landscape.regions.iter_mut().flatten() {
+                r.step_day();
+            }
+            landscape.cross_borders();
+        }
+        landscape.crossings = 0;
         landscape.open_window();
         landscape
     }
@@ -754,6 +770,32 @@ mod tests {
             v
         };
         assert_eq!(correr(), correr());
+    }
+
+    /// Quando o jogador chega, as raposas já estão em equilíbrio (10 a 11
+    /// por região), na janela e nas agregadas. Sem `WARMUP_DAYS` havia 4.
+    #[test]
+    fn a_paisagem_comeca_em_equilibrio() {
+        let (mut janela, mut agregadas, mut n) = (0.0, 0.0, (0.0, 0.0));
+        for seed in 1..=4 {
+            let l = paisagem(seed, 3, (5, 5));
+            assert_eq!(l.day(), Config::default().warmup_days + WARMUP_DAYS);
+            for ry in 0..3 {
+                for rx in 0..3 {
+                    let f = l.counts(rx, ry).1 as f32;
+                    if l.region(rx, ry).is_some() {
+                        agregadas += f;
+                        n.1 += 1.0;
+                    } else {
+                        janela += f;
+                        n.0 += 1.0;
+                    }
+                }
+            }
+        }
+        for (onde, f) in [("janela", janela / n.0), ("agregadas", agregadas / n.1)] {
+            assert!((8.0..14.0).contains(&f), "{onde}: {f:.1} raposas por região");
+        }
     }
 
     /// A paisagem tem, em cada região, o mesmo equilíbrio que uma região

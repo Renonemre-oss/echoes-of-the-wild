@@ -26,9 +26,10 @@ As entradas mais recentes ficam no topo. Quando um marco acontece, passa a ✅ n
 | 13 | Região agregada com o mesmo equilíbrio da simulação completa | ✅ | 2026-11-02 |
 | 14 | Mundo com várias regiões e animais a passar entre elas | ✅ | 2026-11-02 |
 | 15 | Primeira paisagem a andar: a câmara segue o jogador por 25 regiões | ✅ | 2026-11-02 |
-| 16 | Prototype 01 completo | ⬜ | |
+| 16 | Etapa 5 completa: ecossistema mínimo, em equilíbrio desde o primeiro dia | ✅ | 2026-11-03 |
+| 17 | Prototype 01 completo | ⬜ | |
 
-Os marcos 5 a 10 e o 16 seguem o plano da secção 19 do GDD e podem mudar. Os marcos 11 a 15 foram acrescentados depois, para o trabalho que veio a seguir à primeira janela.
+Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os marcos 11 a 16 foram acrescentados depois, para o trabalho que veio a seguir à primeira janela.
 
 ---
 
@@ -143,6 +144,29 @@ Só as agregadas estavam erradas, porque a tabela delas tinha sido medida antes 
 **Próximo passo:** os pontos que ainda estão em aberto: o arranque longe do equilíbrio das raposas, as falhas no rasto a velocidade baixa e o determinismo de `exp` entre plataformas.
 
 ---
+
+### O arranque em equilíbrio e o fim da etapa 5 🏁
+
+**O problema:** o jogo começava com cerca de 4 raposas por região, e elas só chegavam às 10 ou 11 ao fim de uns 600 dias de jogo.
+
+**A solução:** antes de o jogador chegar, a paisagem corre 600 dias (`WARMUP_DAYS`) só com regiões agregadas, com animais a passar entre elas. Só depois se expande a janela. Agregadas, as 25 regiões correm esses 600 dias em cerca de 100 ms: criar a paisagem do jogo passou de 530 para 630 ms. O jogo começa agora no dia 660 do mundo.
+
+**Resultado** (paisagem do jogo, 5x5 regiões, 4 seeds):
+
+| Raposas por região | No dia em que o jogador chega | 250 dias depois | 500 dias depois |
+|---|---|---|---|
+| na janela | 10,7 | 11,1 | 11,4 |
+| nas agregadas | 10,3 | 10,2 | 10,1 |
+
+Os coelhos ficam entre 267 e 277 por região durante esse tempo.
+
+**Teste novo:** `a_paisagem_comeca_em_equilibrio`: logo ao criar a paisagem, a janela e as agregadas têm entre 8 e 14 raposas por região.
+
+**Marco 16** 🎉: **etapa 5 completa**. O ecossistema mínimo do GDD está feito: presas e predadores, comida que acaba e volta a crescer, populações que reagem a ela, vários níveis de detalhe e a performance medida. E agora está em equilíbrio desde o primeiro dia em que o jogador chega.
+
+**O que ficou em aberto, mas não é da etapa 5:** as falhas no rasto a velocidade baixa e o determinismo de `exp` entre plataformas.
+
+**Próximo passo:** etapa 6 (sobrevivência e construção), a começar pelo dia e noite.
 
 ## 2026-11-02 (segunda-feira)
 
