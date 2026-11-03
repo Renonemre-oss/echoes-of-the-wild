@@ -742,6 +742,8 @@ Categorias iniciais propostas:
 
 As receitas específicas, níveis de qualidade e árvore de tecnologia ainda estão por definir.
 
+**No Prototype 01 (etapa 6):** cada região de 24x24 tem 20 árvores (4 madeiras, que voltam a crescer meia madeira por dia) e 8 pedras (6 pedras, que não voltam), sorteadas com números à parte para não mudarem o resto do mundo (`resources.rs`). O jogador recolhe com a tecla E, na célula onde está ou numa das 4 ao lado: 1 unidade por recolha, e cada recolha gasta uma hora de jogo. O inventário leva 20 coisas. Por agora, cortar árvores não mexe na erva nem no abrigo dos animais (7.7): isso fica para quando houver machado.
+
 ## 10.5. Evitar o grind
 
 - Reduzir receitas que exigem quantidades absurdas de materiais comuns.

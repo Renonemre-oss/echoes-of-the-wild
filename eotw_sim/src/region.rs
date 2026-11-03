@@ -20,6 +20,7 @@
 
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
+use crate::resources::Resource;
 use crate::rng::Rng;
 use crate::sim::{far_from, Config, Simulation, TICKS_PER_DAY};
 use crate::world::{distance, World};
@@ -37,6 +38,7 @@ const STREAM_WORLD: u64 = 2;
 const STREAM_RABBITS: u64 = 3;
 const STREAM_FOXES: u64 = 4;
 const STREAM_SIM: u64 = 5;
+const STREAM_RESOURCES: u64 = 6;
 
 /// Tentativas para sortear uma célula longe do jogador.
 const SPAWN_TRIES: usize = 50;
@@ -261,6 +263,9 @@ pub struct AggregateRegion {
     pub foxes: Vec<u32>,
     /// As tocas: são terreno e não mudam quando a região é agregada.
     pub burrows: Vec<(usize, usize)>,
+    /// As árvores e as pedras, com o que ainda têm: também são terreno, e
+    /// as árvores continuam a crescer enquanto a região está agregada.
+    pub resources: Vec<Resource>,
     pub day: u64,
     config: Config,
     params: AggregateParams,
@@ -273,9 +278,13 @@ impl AggregateRegion {
         let fox_days = (config.fox.max_age_ticks / TICKS_PER_DAY) as usize + 1;
         // Tocas ao acaso, com números à parte para não mudar os da região.
         let mut dig = Rng::derived(&[config.seed, seed, STREAM_BURROWS]);
-        let burrows = (0..config.burrows)
+        let burrows: Vec<(usize, usize)> = (0..config.burrows)
             .map(|_| (dig.range_usize(config.width), dig.range_usize(config.height)))
             .collect();
+        let mut dig = Rng::derived(&[config.seed, seed, STREAM_RESOURCES]);
+        let resources = config
+            .resources
+            .place(&mut dig, config.width, config.height, |b| !burrows.contains(&b));
         let reserve = 1.0 - fraction_below(&params.rabbit_energy, config.rabbit.rest_cap);
         Self {
             cells: config.width * config.height,
@@ -284,6 +293,7 @@ impl AggregateRegion {
             rabbits: vec![0; rabbit_days],
             foxes: vec![0; fox_days],
             burrows,
+            resources,
             day: 0,
             config,
             params,
@@ -322,6 +332,7 @@ impl AggregateRegion {
         region.day = day;
         region.biomass = world.mean_biomass();
         region.burrows = world.burrows().to_vec();
+        region.resources = world.resources().to_vec();
         for r in rabbits {
             region.add_rabbit(r.age);
         }
@@ -406,6 +417,9 @@ impl AggregateRegion {
         let mut world = World::new(w, h, c.vegetation.clone(), &mut rng);
         for &(x, y) in &self.burrows {
             world.add_burrow(x, y);
+        }
+        for r in &self.resources {
+            world.add_resource(r.clone());
         }
         let spread: Vec<f32> = (0..w * h).map(|_| lookup(&p.biomass_spread, rng.next_f32())).collect();
         let mut scale = self.biomass / (spread.iter().sum::<f32>() / (w * h) as f32);
@@ -501,6 +515,7 @@ impl AggregateRegion {
     /// Um dia de simulação agregada.
     pub fn step_day(&mut self) {
         self.day += 1;
+        self.config.resources.regrow(&mut self.resources, 1.0);
         let p = self.params.clone();
         let b = self.biomass;
         let r = self.rabbit_count() as f32;

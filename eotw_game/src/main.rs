@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
-use eotw_sim::landscape::{Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{CabinParams, Config, Rabbit, Scent, Simulation, TICKS_PER_DAY};
+use eotw_sim::landscape::{Gather, Landscape, REGION, WINDOW_MARGIN};
+use eotw_sim::{CabinParams, Config, Rabbit, ResourceKind, Scent, Simulation, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -109,11 +109,12 @@ fn main() {
         .insert_resource(options.clone())
         .insert_resource(Walk { cooldown: 0.0 })
         .insert_resource(SmellView(smell))
+        .init_resource::<GatherNote>()
         .init_resource::<Perf>()
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (controls, walk, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot, measure).chain(),
+            (controls, walk, gather, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot, measure).chain(),
         )
         .run();
 }
@@ -235,6 +236,10 @@ struct Walk {
 /// de comida a amarelo por cima da vegetação (GDD 20.12, ver os campos de cheiro).
 #[derive(Resource)]
 struct SmellView(bool);
+
+/// O que aconteceu na última recolha (tecla E), para o painel.
+#[derive(Resource, Default)]
+struct GatherNote(String);
 
 /// Um dos quadrados desenhados à volta do jogador. O índice diz a posição
 /// em relação a ele: coluna `i % VIEW_W` e linha `i / VIEW_W` da vista.
@@ -408,6 +413,33 @@ fn walk(
     }
 }
 
+/// Recolhe com a tecla E da árvore ou da pedra onde o jogador está ou ao
+/// lado. Cada recolha gasta uma hora de jogo, mesmo com o jogo em pausa.
+fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: ResMut<GatherNote>) {
+    if keys.just_pressed(KeyCode::KeyE) {
+        note.0 = gather_note(world.0.gather());
+    }
+}
+
+/// O que o jogador leva, para o painel.
+fn inventory_line(land: &Landscape) -> String {
+    let inv = land.inventory();
+    let carry = land.window_sim().config().resources.carry;
+    let items: Vec<String> = inv.iter().map(|(item, n)| format!("{n} de {}", item.name())).collect();
+    let items = if items.is_empty() { "vazio".to_string() } else { items.join(", ") };
+    format!("Inventário ({} de {carry}): {items}", inv.total())
+}
+
+/// A frase do painel para o resultado de uma recolha.
+fn gather_note(result: Gather) -> String {
+    match result {
+        Gather::Got(item, n) => format!("Recolheste {n} de {} (1 hora).", item.name()),
+        Gather::Nothing => "Não há árvore nem pedra aqui ao lado.".into(),
+        Gather::Empty(item) => format!("Já não há {} aqui.", item.name()),
+        Gather::Full => "O inventário está cheio.".into(),
+    }
+}
+
 /// Corre os ticks que couberem no tempo real que passou.
 fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>, mut perf: ResMut<Perf>) {
     let start = std::time::Instant::now();
@@ -524,6 +556,17 @@ fn draw_animals(
     if let Some(c) = land.cabin() {
         items.push(mark((c.x as i64, c.y as i64), Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5));
     }
+    // As árvores e as pedras encolhem à medida que se recolhem. Uma árvore
+    // cortada fica pequena até voltar a crescer; uma pedra gasta desaparece.
+    let rp = &sim.config().resources;
+    for r in sim.world.resources() {
+        let (color, full) = match r.kind {
+            ResourceKind::Tree => (Color::srgb(0.05, 0.28, 0.10), r.amount / rp.tree_wood),
+            ResourceKind::Rock if r.amount < 1.0 => continue,
+            ResourceKind::Rock => (Color::srgb(0.55, 0.55, 0.58), r.amount / rp.rock_stone),
+        };
+        items.push(mark(global(r.x, r.y), color, CELL * (0.3 + 0.55 * full), 1.2));
+    }
     for (i, r) in visible_rabbits(sim) {
         // Vários coelhos na mesma célula ficam ligeiramente desencontrados.
         let jitter = Vec2::new((i % 3) as f32 - 1.0, ((i / 3) % 3) as f32 - 1.0) * CELL * 0.22;
@@ -572,6 +615,7 @@ fn draw_animals(
 
 fn draw_panel(
     world: Res<World>,
+    note: Res<GatherNote>,
     clock: Res<Clock>,
     smell: Res<SmellView>,
     perf: Res<Perf>,
@@ -600,8 +644,10 @@ fn draw_panel(
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
          No mundo: {} coelhos, {} raposas\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
-         Setas ou WASD: andar\nEspaço: pausa\n+ e -: velocidade\nO: ver o cheiro ({})\n\n\
+         {}{}\n\n\
+         Setas ou WASD: andar\nE: recolher (1 hora)\nEspaço: pausa\n+ e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
+         verde escuro: árvore\n  cinzento: pedra\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
@@ -619,6 +665,8 @@ fn draw_panel(
         totals.1,
         sim.world.mean_biomass(),
         sim.world.capacity(),
+        inventory_line(land),
+        if note.0.is_empty() { String::new() } else { format!("\n{}", note.0) },
         if smell.0 { "ligado: azul é o teu rasto, amarelo a comida" } else { "desligado" },
         if log.is_empty() { String::new() } else { format!("\n\nCabana:{log}") },
     );
@@ -760,6 +808,43 @@ mod tests {
             .add_systems(Update, controls);
         app.update();
         assert!(app.world().resource::<SmellView>().0, "devia ter ligado");
+    }
+
+    /// A tecla E recolhe ao lado de uma árvore ou pedra, e o painel diz o
+    /// que aconteceu. Longe de tudo, diz que não há nada.
+    #[test]
+    fn a_tecla_e_recolhe() {
+        let mut land = paisagem((12, 12));
+        let r = land.window_sim().world.resources()[0].clone();
+        let (ox, oy) = land.window_origin();
+        // Anda até em cima do recurso.
+        while land.player() != (ox + r.x, oy + r.y) {
+            let p = land.player();
+            let dx = ((ox + r.x) as i32 - p.0 as i32).signum();
+            let dy = if dx == 0 { ((oy + r.y) as i32 - p.1 as i32).signum() } else { 0 };
+            land.move_player(dx, dy);
+        }
+        let mut app = App::new();
+        let mut input = ButtonInput::<KeyCode>::default();
+        input.press(KeyCode::KeyE);
+        app.insert_resource(input)
+            .insert_resource(World(land))
+            .init_resource::<GatherNote>()
+            .add_systems(Update, gather);
+        app.update();
+        let item = r.kind.item();
+        assert_eq!(app.world().resource::<World>().0.inventory().count(item), 1);
+        assert_eq!(app.world().resource::<GatherNote>().0, format!("Recolheste 1 de {} (1 hora).", item.name()));
+        assert!(inventory_line(&app.world().resource::<World>().0).starts_with("Inventário (1 de 20)"));
+    }
+
+    #[test]
+    fn o_painel_explica_a_recolha() {
+        use eotw_sim::Item;
+        assert_eq!(gather_note(Gather::Nothing), "Não há árvore nem pedra aqui ao lado.");
+        assert_eq!(gather_note(Gather::Empty(Item::Wood)), "Já não há madeira aqui.");
+        assert_eq!(gather_note(Gather::Full), "O inventário está cheio.");
+        assert!(inventory_line(&paisagem((12, 12))).ends_with("vazio"));
     }
 
     /// O jogador a andar à velocidade normal do jogo (cerca de 8 células por

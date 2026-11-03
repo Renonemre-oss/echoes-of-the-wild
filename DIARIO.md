@@ -285,6 +285,34 @@ Para medir apenas o equilíbrio, aproveitei só os dias de equilíbrio. Para med
 
 **Próximo passo:** o resto da etapa 6 (inventário, recolha, ferramentas, crafting e abrigo).
 
+### Árvores, pedras e inventário 🪓
+
+Segundo passo da etapa 6: o jogador já pode recolher madeira e pedra (GDD 12, Fase 1).
+
+**O que foi decidido antes de começar:**
+- **Recursos:** só árvores e pedras, como pede o GDD. Os frutos ficam para mais tarde.
+- **Ecologia:** cortar ainda não mexe no ecossistema. As árvores esgotam-se e voltam a crescer devagar, mas não mudam a erva nem o abrigo dos coelhos. A ligação do GDD 7.7 ("desflorestar reduz o abrigo e a capacidade") fica para quando houver machado.
+- **Tempo:** cada recolha gasta uma hora de jogo. O mundo continua enquanto o jogador trabalha, e a noite passa a ser algo que se planeia.
+
+**O que foi feito:**
+- **Recursos no terreno** (`resources.rs`): cada região de 24x24 tem 20 árvores (4 madeiras cada, que voltam a crescer meia madeira por dia) e 8 pedras (6 pedras cada, que não voltam). Ficam fora das tocas, no máximo um por célula, e um mapa maior tem mais.
+- **Números à parte:** os recursos são sorteados com uma sequência própria (`Rng::derived`). Por isso os testes de equilíbrio dão exatamente os mesmos números que antes: o resto do mundo de cada seed não mudou.
+- **Como terreno, passam por todo o lado:** estão na simulação completa, a janela recorta-os e junta-os como às tocas, e a região agregada guarda-os e faz crescer as árvores uma vez por dia.
+- **Inventário:** leva até 20 coisas, de todos os tipos juntos.
+- **Recolher** (`Landscape::gather`): da árvore ou da pedra onde o jogador está ou numa das 4 células ao lado, 1 unidade por hora. Se não houver nada, se o recurso estiver gasto ou se o inventário estiver cheio, não gasta tempo, e o painel diz porquê.
+- **No jogo:** tecla E para recolher. As árvores são quadrados verde-escuros e as pedras cinzentos, que encolhem à medida que se recolhem. O painel mostra o inventário e o resultado da última recolha. O tempo por frame não mudou (7,6 ms de mediana a 240 horas por segundo).
+
+![Árvores e pedras no mapa](docs/recursos.png)
+
+**Testes novos:**
+- nos recursos: `o_inventario_tem_limite`, `as_arvores_voltam_a_crescer_e_as_pedras_nao` e `os_recursos_espalham_se_uma_por_celula`;
+- na paisagem: `as_arvores_e_as_pedras_ficam_quando_a_janela_anda`, `recolher_madeira_gasta_uma_hora`, `sem_espaco_ou_sem_recurso_nao_gasta_tempo` e `as_arvores_crescem_nas_regioes_agregadas`;
+- no jogo: `a_tecla_e_recolhe` e `o_painel_explica_a_recolha`.
+
+**Testado no jogo:** a recolha de madeira e de pedra com o E funciona. Fica para rever o tamanho do inventário (20 coisas): só se vai saber quanto deve levar quando houver receitas que gastem madeira e pedra.
+
+**Próximo passo:** as ferramentas e o fabrico (crafting). Por exemplo, um machado de madeira e pedra que recolhe mais depressa.
+
 ## 2026-11-02 (segunda-feira)
 
 **O que foi feito**

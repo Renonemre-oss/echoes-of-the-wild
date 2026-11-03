@@ -23,6 +23,7 @@
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
 use crate::region::{AggregateParams, AggregateRegion};
+use crate::resources::{Inventory, Item, Resource};
 use crate::rng::Rng;
 use crate::scent::KINDS;
 use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
@@ -109,6 +110,21 @@ pub struct Landscape {
     pub events: Vec<String>,
     /// Quantos animais passaram de uma região para outra, desde o início.
     pub crossings: usize,
+    /// O que o jogador leva consigo.
+    inventory: Inventory,
+}
+
+/// O resultado de uma tentativa de recolha (`Landscape::gather`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Gather {
+    /// Recolheu isto. Passaram `gather_hours` de jogo.
+    Got(Item, u32),
+    /// Não há árvore nem pedra ali.
+    Nothing,
+    /// A árvore ou a pedra ao lado já não tem nada para dar.
+    Empty(Item),
+    /// O inventário está cheio.
+    Full,
 }
 
 impl Landscape {
@@ -166,6 +182,7 @@ impl Landscape {
             rng,
             events: Vec::new(),
             crossings: 0,
+            inventory: Inventory::default(),
         };
         // Sem janela ainda, todas as regiões são agregadas.
         for _ in 0..WARMUP_DAYS {
@@ -208,6 +225,43 @@ impl Landscape {
 
     pub fn day(&self) -> u64 {
         self.window.sim.day()
+    }
+
+    pub fn inventory(&self) -> &Inventory {
+        &self.inventory
+    }
+
+    /// Recolhe da árvore ou da pedra onde o jogador está, ou de uma das 4
+    /// células ao lado (GDD 12, Fase 1). Cada recolha dá `gather_amount` e
+    /// gasta `gather_hours` de jogo: o mundo continua enquanto ele trabalha.
+    /// Se não houver nada para recolher, ou não couber, não gasta tempo.
+    pub fn gather(&mut self) -> Gather {
+        let p = self.config.resources.clone();
+        let world = &self.window.sim.world;
+        let Some(here) = self.in_window(self.player) else {
+            return Gather::Nothing;
+        };
+        let near: Vec<(usize, usize)> = std::iter::once(here)
+            .chain(world.neighbors(here.0, here.1).into_iter().flatten())
+            .collect();
+        let found: Vec<&Resource> = near.iter().filter_map(|&(x, y)| world.resource_at(x, y)).collect();
+        let Some(first) = found.first() else {
+            return Gather::Nothing;
+        };
+        let Some(r) = found.iter().find(|r| r.amount >= p.gather_amount) else {
+            return Gather::Empty(first.kind.item());
+        };
+        let (item, cell) = (r.kind.item(), (r.x, r.y));
+        let n = p.gather_amount as u32;
+        if self.inventory.total() + n > p.carry {
+            return Gather::Full;
+        }
+        self.inventory.add(item, n, p.carry);
+        self.window.sim.world.take_resource(cell.0, cell.1, p.gather_amount);
+        for _ in 0..p.gather_hours {
+            self.step();
+        }
+        Gather::Got(item, n)
     }
 
     /// Uma região agregada (`None` se estiver na janela).
@@ -386,6 +440,9 @@ impl Landscape {
                 for &(x, y) in cut.world.burrows() {
                     world.add_burrow(ox + x, oy + y);
                 }
+                for r in cut.world.resources() {
+                    world.add_resource(Resource { x: ox + r.x, y: oy + r.y, ..r.clone() });
+                }
                 rabbits.extend(cut.rabbits.into_iter().map(|mut a| {
                     (a.x, a.y) = (ox + a.x, oy + a.y);
                     a
@@ -432,6 +489,9 @@ impl Landscape {
             if inside(x, y) {
                 world.add_burrow(x - x0, y - y0);
             }
+        }
+        for r in sim.world.resources().iter().filter(|r| inside(r.x, r.y)) {
+            world.add_resource(Resource { x: r.x - x0, y: r.y - y0, ..r.clone() });
         }
         let rabbits = sim
             .rabbits
@@ -624,6 +684,7 @@ fn binomial(rng: &mut Rng, n: usize, p: f32) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::{ResourceKind, ResourceParams};
 
     fn paisagem(seed: u64, lado: usize, jogador: (usize, usize)) -> Landscape {
         Landscape::new(
@@ -671,6 +732,121 @@ mod tests {
         assert_eq!(l.totals(), antes);
         let ficaram: Vec<_> = animais(&l).into_iter().filter(ficam).collect();
         assert_eq!(ficaram, ficavam);
+    }
+
+    /// As árvores e as pedras da paisagem inteira, em células dela, por ordem.
+    fn recursos(l: &Landscape) -> Vec<(usize, usize, ResourceKind, u32)> {
+        let (ox, oy) = l.window_origin();
+        let um = |x: usize, y: usize, r: &Resource| (x + r.x, y + r.y, r.kind, (r.amount * 1000.0).round() as u32);
+        let mut v: Vec<_> = l.window_sim().world.resources().iter().map(|r| um(ox, oy, r)).collect();
+        for ry in 0..l.rows {
+            for rx in 0..l.cols {
+                if let Some(region) = l.region(rx, ry) {
+                    v.extend(region.resources.iter().map(|r| um(rx * REGION, ry * REGION, r)));
+                }
+            }
+        }
+        v.sort_by_key(|&(x, y, _, _)| (y, x));
+        v
+    }
+
+    /// Anda até à célula, um passo de cada vez.
+    fn ir_para(l: &mut Landscape, alvo: (usize, usize)) {
+        while l.player() != alvo {
+            let p = l.player();
+            let dx = (alvo.0 as i32 - p.0 as i32).signum();
+            let dy = if dx == 0 { (alvo.1 as i32 - p.1 as i32).signum() } else { 0 };
+            l.move_player(dx, dy);
+        }
+    }
+
+    /// As árvores e as pedras são terreno: não se perdem nem mudam quando a
+    /// janela se desloca, e há as mesmas em cada região.
+    #[test]
+    fn as_arvores_e_as_pedras_ficam_quando_a_janela_anda() {
+        let mut l = paisagem(1, 4, (47, 36));
+        let antes = recursos(&l);
+        let p = ResourceParams::default();
+        assert_eq!(antes.len(), 16 * (p.trees + p.rocks));
+        for _ in 0..=HYSTERESIS {
+            l.move_player(1, 0);
+        }
+        assert_eq!(l.window_origin(), (REGION, 0));
+        assert_eq!(recursos(&l), antes);
+    }
+
+    /// Ao lado de uma árvore, cada recolha dá 1 madeira e gasta 1 hora.
+    #[test]
+    fn recolher_madeira_gasta_uma_hora() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let (ox, oy) = l.window_origin();
+        let arvore = l
+            .window_sim()
+            .world
+            .resources()
+            .iter()
+            .filter(|r| r.kind == ResourceKind::Tree)
+            .map(|r| (ox + r.x, oy + r.y))
+            .min_by_key(|&c| distance(c, (36, 36)))
+            .unwrap();
+        // Ao lado da árvore, e não em cima dela.
+        let lado = if arvore.0 > 0 { (arvore.0 - 1, arvore.1) } else { (arvore.0 + 1, arvore.1) };
+        ir_para(&mut l, lado);
+        let tick = l.window_sim().tick();
+        let madeira = |l: &Landscape| {
+            let local = l.in_window(arvore).unwrap();
+            l.window_sim().world.resource_at(local.0, local.1).unwrap().amount
+        };
+        let antes = madeira(&l);
+        assert_eq!(l.gather(), Gather::Got(Item::Wood, 1));
+        assert_eq!(l.inventory().count(Item::Wood), 1);
+        assert_eq!(l.window_sim().tick(), tick + 1);
+        let p = ResourceParams::default();
+        assert!((madeira(&l) - (antes - 1.0 + p.tree_regrowth / 24.0)).abs() < 1e-4);
+    }
+
+    /// Com o inventário cheio, ou sem nada ao lado, não recolhe nem gasta tempo.
+    #[test]
+    fn sem_espaco_ou_sem_recurso_nao_gasta_tempo() {
+        let config = Config {
+            seed: 3,
+            resources: ResourceParams { carry: 1, ..ResourceParams::default() },
+            ..Config::default()
+        };
+        let mut l = Landscape::new(config, 3, 3, (36, 36));
+        let (ox, oy) = l.window_origin();
+        let world = &l.window_sim().world;
+        let r = &world.resources()[0];
+        let (alvo, item) = ((ox + r.x, oy + r.y), r.kind.item());
+        // Uma célula sem nada nela nem nas 4 ao lado.
+        let vazia = (0..world.height)
+            .flat_map(|y| (0..world.width).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                std::iter::once((x, y))
+                    .chain(world.neighbors(x, y).into_iter().flatten())
+                    .all(|(a, b)| world.resource_at(a, b).is_none())
+            })
+            .map(|(x, y)| (ox + x, oy + y))
+            .unwrap();
+        ir_para(&mut l, vazia);
+        let tick = l.window_sim().tick();
+        assert_eq!(l.gather(), Gather::Nothing);
+        ir_para(&mut l, alvo);
+        assert_eq!(l.gather(), Gather::Got(item, 1));
+        assert_eq!(l.gather(), Gather::Full);
+        assert_eq!(l.window_sim().tick(), tick + 1, "só a recolha que deu gastou tempo");
+    }
+
+    /// Uma árvore cortada volta a crescer, também numa região agregada.
+    #[test]
+    fn as_arvores_crescem_nas_regioes_agregadas() {
+        let mut l = paisagem(1, 4, (12, 12));
+        let longe = l.region_mut(3, 3).expect("longe do jogador, agregada");
+        let i = longe.resources.iter().position(|r| r.kind == ResourceKind::Tree).unwrap();
+        longe.resources[i].amount = 0.0;
+        l.run_days(2);
+        let p = ResourceParams::default();
+        assert_eq!(l.region(3, 3).unwrap().resources[i].amount, 2.0 * p.tree_regrowth);
     }
 
     /// GDD 7.9: ao andar pela paisagem, nunca aparece nem desaparece um

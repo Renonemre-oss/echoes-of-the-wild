@@ -2,6 +2,7 @@
 //!
 //! GDD 7.7: a vegetação é um recurso que se gasta e se regenera, não só decoração.
 
+use crate::resources::Resource;
 use crate::rng::Rng;
 use crate::scent::ScentField;
 
@@ -39,6 +40,9 @@ pub struct World {
     /// Restos de comida deixados pelo jogador (teste da cabana, GDD 18.4).
     /// Coelhos e raposas comem-nos se estiverem na mesma célula.
     scraps: Vec<f32>,
+    /// Árvores e pedras que o jogador pode recolher (GDD 7.7: entidades
+    /// separadas da vegetação). São poucas, por isso uma lista chega.
+    resources: Vec<Resource>,
     /// Os campos de cheiro (GDD 7.6). A simulação deposita e espalha; os
     /// animais só os leem.
     pub scent: ScentField,
@@ -57,6 +61,7 @@ impl World {
             burrows: vec![false; width * height],
             burrow_list: Vec::new(),
             scraps: vec![0.0; width * height],
+            resources: Vec::new(),
             scent: ScentField::new(width, height),
             params,
         }
@@ -132,6 +137,40 @@ impl World {
             }
         }
         best.map(|(cell, _)| cell)
+    }
+
+    /// Põe uma árvore ou uma pedra no terreno. Numa célula que já tenha um
+    /// recurso não faz nada.
+    pub fn add_resource(&mut self, r: Resource) {
+        if self.resource_at(r.x, r.y).is_none() {
+            self.resources.push(r);
+        }
+    }
+
+    pub fn resources(&self) -> &[Resource] {
+        &self.resources
+    }
+
+    pub fn resources_mut(&mut self) -> &mut [Resource] {
+        &mut self.resources
+    }
+
+    pub fn resource_at(&self, x: usize, y: usize) -> Option<&Resource> {
+        self.resources.iter().find(|r| (r.x, r.y) == (x, y))
+    }
+
+    /// Retira até `amount` do recurso da célula e devolve o que foi realmente
+    /// retirado (0 se não houver recurso). Uma árvore cortada fica no sítio,
+    /// sem madeira, e volta a crescer.
+    pub fn take_resource(&mut self, x: usize, y: usize, amount: f32) -> f32 {
+        match self.resources.iter_mut().find(|r| (r.x, r.y) == (x, y)) {
+            Some(r) => {
+                let taken = amount.min(r.amount);
+                r.amount -= taken;
+                taken
+            }
+            None => 0.0,
+        }
     }
 
     pub fn add_scraps(&mut self, x: usize, y: usize, amount: f32) {

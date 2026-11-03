@@ -23,7 +23,7 @@ cargo run -p eotw_cli -- --seed 7 --days 200 --csv relatorio.csv
 cargo run -p eotw_cli -- --cabin            # teste da cabana: tempo na zona, cadeias de eventos e um registo
 cargo run --release -p eotw_cli -- --sweep  # varredura dos parâmetros sensíveis (~1 min)
 cargo run --release -p eotw_cli -- --bench  # tempo por tick em mapas de 24 a 192 de lado
-cargo run -p eotw_game          # a janela: setas/WASD andam, Espaço pausa, + e - velocidade, O vê o cheiro
+cargo run -p eotw_game          # a janela: setas/WASD andam, E recolhe, Espaço pausa, + e - velocidade, O vê o cheiro
 cargo run -p eotw_game -- --cabin --seed 6
 cargo run --release -p eotw_game -- --speed 240 --frames 600   # mede o tempo por frame e sai
 cargo run -p eotw_game -- --hour 22   # chega às 22h, já de noite (por omissão, às 7h)
@@ -43,6 +43,7 @@ A primeira compilação do jogo (`eotw_game`, com Bevy) demora muito mais: neste
 - `eotw_sim/src/rabbit.rs`: o comportamento do coelho (comer, procurar, fugir para a toca, reproduzir).
 - `eotw_sim/src/fox.rs`: o comportamento da raposa (ver, perseguir, caçar, comer restos, travão de densidade).
 - `eotw_sim/src/world.rs`: o crescimento da vegetação as tocas e os restos de comida.
+- `eotw_sim/src/resources.rs`: as árvores, as pedras e o inventário do jogador.
 - `eotw_sim/src/scent.rs`: os campos de cheiro (depositar, espalhar, decair, seguir o gradiente).
 - `eotw_sim/src/sim.rs`: a ordem de cada tick, a chegada das raposas, o aquecimento, a cabana e a migração de segurança.
 - `eotw_sim/src/sweep.rs`: as varreduras de parâmetros e o teste das margens do equilíbrio.

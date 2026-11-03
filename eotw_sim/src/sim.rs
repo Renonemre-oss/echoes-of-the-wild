@@ -3,6 +3,7 @@
 use crate::daylight::{self, DaylightParams};
 use crate::fox::{Fox, FoxParams};
 use crate::rabbit::{Rabbit, RabbitParams};
+use crate::resources::ResourceParams;
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
 use crate::spatial::Grid;
@@ -33,6 +34,9 @@ pub const SPAWN_CLEAR_RADIUS: usize = 8;
 
 /// Tentativas para encontrar uma célula longe do jogador.
 const SPAWN_TRIES: usize = 50;
+
+/// A sequência de números ao acaso das árvores e das pedras (ver `Rng::derived`).
+const STREAM_RESOURCES: u64 = 21;
 
 /// A célula fica a mais de `SPAWN_CLEAR_RADIUS` do jogador (ou não há jogador).
 pub fn far_from(player: Option<(usize, usize)>, cell: (usize, usize)) -> bool {
@@ -205,6 +209,7 @@ pub struct Config {
     pub migration: MigrationParams,
     pub scent: ScentParams,
     pub daylight: DaylightParams,
+    pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
 
@@ -225,6 +230,7 @@ impl Default for Config {
             migration: MigrationParams::default(),
             scent: ScentParams::default(),
             daylight: DaylightParams::default(),
+            resources: ResourceParams::default(),
             cabin: None,
         }
     }
@@ -350,6 +356,13 @@ impl Simulation {
             let x = rng.range_usize(config.width);
             let y = rng.range_usize(config.height);
             world.add_burrow(x, y);
+        }
+        // As árvores e as pedras têm números à parte: assim o resto do mundo
+        // de uma seed é o mesmo que antes de existirem.
+        let mut dig = Rng::derived(&[config.seed, STREAM_RESOURCES]);
+        let placed = config.resources.place(&mut dig, config.width, config.height, |(x, y)| !world.is_burrow(x, y));
+        for r in placed {
+            world.add_resource(r);
         }
         let mut sim = Self::assemble(config, rng, world, rabbits, Vec::new(), 0);
         sim.leave_cabin_food();
@@ -515,6 +528,7 @@ impl Simulation {
     pub fn step(&mut self) {
         self.tick += 1;
         self.world.grow();
+        self.config.resources.regrow(self.world.resources_mut(), 1.0 / TICKS_PER_DAY as f32);
         self.update_scent();
         // Com a luz desta hora, cada animal vê até onde lhe deixa a escuridão.
         let light = self.light();
