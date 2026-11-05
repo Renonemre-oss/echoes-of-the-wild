@@ -22,7 +22,7 @@ use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Gather, Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{CabinParams, Config, Rabbit, ResourceKind, Scent, Simulation, TICKS_PER_DAY};
+use eotw_sim::{CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Tool, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -343,7 +343,7 @@ fn setup(mut commands: Commands, assets: Res<AssetServer>) {
         Text::new(""),
         TextFont {
             font: assets.load("fonts/DejaVuSans.ttf"),
-            font_size: 17.0,
+            font_size: 15.0,
             ..default()
         },
         TextColor(Color::srgb(0.92, 0.92, 0.88)),
@@ -414,10 +414,25 @@ fn walk(
 }
 
 /// Recolhe com a tecla E da árvore ou da pedra onde o jogador está ou ao
-/// lado. Cada recolha gasta uma hora de jogo, mesmo com o jogo em pausa.
+/// lado, e faz o machado com 1 e a picareta com 2. Cada recolha e cada
+/// fabrico gastam uma hora de jogo, mesmo com o jogo em pausa.
 fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: ResMut<GatherNote>) {
     if keys.just_pressed(KeyCode::KeyE) {
         note.0 = gather_note(world.0.gather());
+    }
+    for (key, tool) in [(KeyCode::Digit1, Tool::Axe), (KeyCode::Digit2, Tool::Pickaxe)] {
+        if keys.just_pressed(key) {
+            note.0 = craft_note(tool, world.0.craft(tool));
+        }
+    }
+}
+
+/// A frase do painel para o resultado de um fabrico.
+fn craft_note(tool: Tool, result: Craft) -> String {
+    match result {
+        Craft::Made => format!("Fizeste {} (1 hora).", tool.with_article()),
+        Craft::Missing(item, n) => format!("Para {} falta {n} de {}.", tool.with_article(), item.name()),
+        Craft::AlreadyHave => format!("Já tens {}.", tool.with_article()),
     }
 }
 
@@ -427,13 +442,19 @@ fn inventory_line(land: &Landscape) -> String {
     let carry = land.window_sim().config().resources.carry;
     let items: Vec<String> = inv.iter().map(|(item, n)| format!("{n} de {}", item.name())).collect();
     let items = if items.is_empty() { "vazio".to_string() } else { items.join(", ") };
-    format!("Inventário ({} de {carry}): {items}", inv.total())
+    let tools: Vec<String> = inv.tools().map(|(t, n)| format!("{} ({n} usos)", t.name())).collect();
+    let tools = if tools.is_empty() { "nenhuma".to_string() } else { tools.join(", ") };
+    format!("Inventário ({} de {carry}): {items}\nFerramentas: {tools}", inv.total())
 }
 
 /// A frase do painel para o resultado de uma recolha.
 fn gather_note(result: Gather) -> String {
     match result {
-        Gather::Got(item, n) => format!("Recolheste {n} de {} (1 hora).", item.name()),
+        Gather::Got { item, amount, broke: None } => format!("Recolheste {amount} de {} (1 hora).", item.name()),
+        Gather::Got { item, amount, broke: Some(tool) } => {
+            let article = if tool == Tool::Axe { "O" } else { "A" };
+            format!("Recolheste {amount} de {}. {article} {} partiu-se.", item.name(), tool.name())
+        }
         Gather::Nothing => "Não há árvore nem pedra aqui ao lado.".into(),
         Gather::Empty(item) => format!("Já não há {} aqui.", item.name()),
         Gather::Full => "O inventário está cheio.".into(),
@@ -645,9 +666,9 @@ fn draw_panel(
          No mundo: {} coelhos, {} raposas\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
          {}{}\n\n\
-         Setas ou WASD: andar\nE: recolher (1 hora)\nEspaço: pausa\n+ e -: velocidade\nO: ver o cheiro ({})\n\n\
+         Setas ou WASD: andar\nE: recolher (1 hora)\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
-         verde escuro: árvore\n  cinzento: pedra\n  \
+         verde escuro: árvore (abrigo)\n  cinzento: pedra\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
@@ -835,6 +856,12 @@ mod tests {
         let item = r.kind.item();
         assert_eq!(app.world().resource::<World>().0.inventory().count(item), 1);
         assert_eq!(app.world().resource::<GatherNote>().0, format!("Recolheste 1 de {} (1 hora).", item.name()));
+        // Com uma pedra ou uma madeira não chega para um machado.
+        let mut input = ButtonInput::<KeyCode>::default();
+        input.press(KeyCode::Digit1);
+        app.insert_resource(input);
+        app.update();
+        assert!(app.world().resource::<GatherNote>().0.starts_with("Para um machado falta"));
         assert!(inventory_line(&app.world().resource::<World>().0).starts_with("Inventário (1 de 20)"));
     }
 
@@ -844,7 +871,11 @@ mod tests {
         assert_eq!(gather_note(Gather::Nothing), "Não há árvore nem pedra aqui ao lado.");
         assert_eq!(gather_note(Gather::Empty(Item::Wood)), "Já não há madeira aqui.");
         assert_eq!(gather_note(Gather::Full), "O inventário está cheio.");
-        assert!(inventory_line(&paisagem((12, 12))).ends_with("vazio"));
+        let partiu = Gather::Got { item: Item::Wood, amount: 2, broke: Some(Tool::Axe) };
+        assert_eq!(gather_note(partiu), "Recolheste 2 de madeira. O machado partiu-se.");
+        assert_eq!(craft_note(Tool::Pickaxe, Craft::Made), "Fizeste uma picareta (1 hora).");
+        assert_eq!(craft_note(Tool::Axe, Craft::AlreadyHave), "Já tens um machado.");
+        assert!(inventory_line(&paisagem((12, 12))).ends_with("vazio\nFerramentas: nenhuma"));
     }
 
     /// O jogador a andar à velocidade normal do jogo (cerca de 8 células por

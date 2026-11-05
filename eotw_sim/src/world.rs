@@ -2,7 +2,7 @@
 //!
 //! GDD 7.7: a vegetação é um recurso que se gasta e se regenera, não só decoração.
 
-use crate::resources::Resource;
+use crate::resources::{Resource, ResourceKind, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::ScentField;
 
@@ -27,6 +27,9 @@ impl Default for VegetationParams {
     }
 }
 
+/// Até quantas células à volta (em quadrado) uma árvore abriga os coelhos.
+pub const TREE_COVER: usize = 1;
+
 #[derive(Clone, Debug)]
 pub struct World {
     pub width: usize,
@@ -43,6 +46,15 @@ pub struct World {
     /// Árvores e pedras que o jogador pode recolher (GDD 7.7: entidades
     /// separadas da vegetação). São poucas, por isso uma lista chega.
     resources: Vec<Resource>,
+    /// Células abrigadas por uma árvore com madeira (a `TREE_COVER` ou menos).
+    /// Uma árvore cortada não abriga até voltar a ter madeira.
+    cover: Vec<bool>,
+    /// Clareiras: células à volta de uma árvore cortada que nenhuma árvore
+    /// inteira abriga. Os coelhos sentem-se expostos e evitam-nas.
+    clearing: Vec<bool>,
+    /// A madeira que uma árvore precisa de ter para abrigar
+    /// (`ResourceParams::shelter_wood`, posta em `regrow_resources`).
+    shelter_wood: f32,
     /// Os campos de cheiro (GDD 7.6). A simulação deposita e espalha; os
     /// animais só os leem.
     pub scent: ScentField,
@@ -62,6 +74,9 @@ impl World {
             burrow_list: Vec::new(),
             scraps: vec![0.0; width * height],
             resources: Vec::new(),
+            cover: vec![false; width * height],
+            clearing: vec![false; width * height],
+            shelter_wood: ResourceParams::default().shelter_wood,
             scent: ScentField::new(width, height),
             params,
         }
@@ -144,15 +159,56 @@ impl World {
     pub fn add_resource(&mut self, r: Resource) {
         if self.resource_at(r.x, r.y).is_none() {
             self.resources.push(r);
+            self.refresh_cover();
+        }
+    }
+
+    /// A célula está abrigada por uma árvore (GDD 7.1: abrigo).
+    pub fn tree_cover(&self, x: usize, y: usize) -> bool {
+        self.cover[self.idx(x, y)]
+    }
+
+    /// As árvores voltam a crescer (ver `ResourceParams::regrow`), e as que
+    /// voltam a ter madeira voltam a abrigar.
+    pub fn regrow_resources(&mut self, params: &ResourceParams, days: f32) {
+        params.regrow(&mut self.resources, days);
+        self.shelter_wood = params.shelter_wood;
+        self.refresh_cover();
+    }
+
+    /// A célula é uma clareira: está ao lado de uma árvore cortada e nenhuma
+    /// árvore inteira a abriga.
+    pub fn clearing(&self, x: usize, y: usize) -> bool {
+        self.clearing[self.idx(x, y)]
+    }
+
+    /// Volta a marcar as células abrigadas e as clareiras. São poucas
+    /// árvores, por isso refazer tudo é barato.
+    fn refresh_cover(&mut self) {
+        self.cover.fill(false);
+        self.clearing.fill(false);
+        let (w, h) = (self.width, self.height);
+        // As células a `TREE_COVER` ou menos de cada árvore, inteiras ou cortadas.
+        let mut whole = Vec::new();
+        let mut cut = Vec::new();
+        for r in self.resources.iter().filter(|r| r.kind == ResourceKind::Tree) {
+            let list = if r.amount >= self.shelter_wood { &mut whole } else { &mut cut };
+            for y in r.y.saturating_sub(TREE_COVER)..=(r.y + TREE_COVER).min(h - 1) {
+                for x in r.x.saturating_sub(TREE_COVER)..=(r.x + TREE_COVER).min(w - 1) {
+                    list.push(y * w + x);
+                }
+            }
+        }
+        for i in whole {
+            self.cover[i] = true;
+        }
+        for i in cut {
+            self.clearing[i] = !self.cover[i];
         }
     }
 
     pub fn resources(&self) -> &[Resource] {
         &self.resources
-    }
-
-    pub fn resources_mut(&mut self) -> &mut [Resource] {
-        &mut self.resources
     }
 
     pub fn resource_at(&self, x: usize, y: usize) -> Option<&Resource> {
@@ -167,6 +223,7 @@ impl World {
             Some(r) => {
                 let taken = amount.min(r.amount);
                 r.amount -= taken;
+                self.refresh_cover();
                 taken
             }
             None => 0.0,
@@ -273,6 +330,27 @@ mod tests {
     fn mundo() -> World {
         let mut rng = Rng::new(1);
         World::new(8, 8, VegetationParams::default(), &mut rng)
+    }
+
+    /// Uma árvore inteira abriga as células à volta. Cortada, mesmo que só
+    /// em parte, deixa uma clareira até voltar a estar inteira.
+    #[test]
+    fn a_arvore_abriga_ate_ser_cortada() {
+        let mut w = mundo();
+        let p = ResourceParams::default();
+        w.add_resource(Resource { x: 3, y: 3, kind: ResourceKind::Tree, amount: p.tree_wood });
+        w.add_resource(Resource { x: 7, y: 0, kind: ResourceKind::Rock, amount: p.rock_stone });
+        assert!(w.tree_cover(3, 3) && w.tree_cover(2, 4) && w.tree_cover(4, 2));
+        assert!(!w.tree_cover(5, 3), "a 2 células já não abriga");
+        assert!(!w.tree_cover(7, 0), "as pedras não abrigam");
+        assert!(!w.clearing(2, 4), "à volta de uma árvore inteira não há clareira");
+        w.take_resource(3, 3, 1.0);
+        assert!(!w.tree_cover(3, 3), "basta tirar-lhe 1 de madeira para não abrigar");
+        assert!(w.clearing(2, 4) && w.clearing(3, 3), "fica uma clareira à volta");
+        w.regrow_resources(&p, 0.5 / p.tree_regrowth);
+        assert!(w.clearing(2, 4), "ainda não está inteira");
+        w.regrow_resources(&p, 1.0 / p.tree_regrowth);
+        assert!(w.tree_cover(3, 3) && !w.clearing(2, 4), "inteira, volta a abrigar");
     }
 
     #[test]

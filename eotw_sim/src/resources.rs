@@ -1,5 +1,6 @@
-//! Os recursos que o jogador recolhe e o inventário onde os leva (GDD 12,
-//! Fase 1: "Recolher madeira e pedra"; GDD 19, etapa 6).
+//! Os recursos que o jogador recolhe, o inventário onde os leva e as
+//! ferramentas que faz com eles (GDD 12, Fase 1: "Recolher madeira e pedra"
+//! e "Criar ferramentas básicas"; GDD 19, etapa 6).
 //!
 //! As árvores e as pedras são entidades separadas da vegetação (GDD 7.7). Por
 //! agora não mexem no ecossistema: os animais passam por elas, e cortar uma
@@ -22,6 +23,49 @@ impl Item {
         match self {
             Item::Wood => "madeira",
             Item::Stone => "pedra",
+        }
+    }
+}
+
+/// Uma ferramenta (GDD 10.4: ferramentas de recolha). Recolhe o dobro do
+/// recurso a que se destina, e parte-se ao fim de `tool_uses` recolhas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Tool {
+    Axe,
+    Pickaxe,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 2] = [Tool::Axe, Tool::Pickaxe];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::Axe => "machado",
+            Tool::Pickaxe => "picareta",
+        }
+    }
+
+    /// O nome com o artigo: "um machado", "uma picareta".
+    pub fn with_article(self) -> &'static str {
+        match self {
+            Tool::Axe => "um machado",
+            Tool::Pickaxe => "uma picareta",
+        }
+    }
+
+    /// O que custa fazer: madeira e pedra (GDD 10.5: poucas quantidades).
+    pub fn recipe(self) -> [(Item, u32); 2] {
+        match self {
+            Tool::Axe => [(Item::Wood, 3), (Item::Stone, 2)],
+            Tool::Pickaxe => [(Item::Wood, 2), (Item::Stone, 3)],
+        }
+    }
+
+    /// O recurso que recolhe melhor.
+    pub fn for_item(item: Item) -> Tool {
+        match item {
+            Item::Wood => Tool::Axe,
+            Item::Stone => Tool::Pickaxe,
         }
     }
 }
@@ -60,14 +104,27 @@ pub struct ResourceParams {
     /// Madeira de uma árvore inteira, e pedra de uma pedra.
     pub tree_wood: f32,
     pub rock_stone: f32,
-    /// Madeira que uma árvore volta a ganhar por dia, até `tree_wood`.
+    /// Madeira que uma árvore volta a ganhar por dia, até `tree_wood`. Com
+    /// 0,1, uma árvore cortada leva 40 dias a ficar inteira: cortar tem
+    /// consequências que duram.
     pub tree_regrowth: f32,
+    /// Madeira que uma árvore precisa de ter para abrigar os coelhos. Com
+    /// `tree_wood`, só abriga inteira: à volta de uma árvore cortada, mesmo
+    /// que só em parte, fica uma clareira até ela voltar a crescer.
+    pub shelter_wood: f32,
     /// Horas de jogo que uma recolha gasta.
     pub gather_hours: u64,
     /// Quanto se recolhe de cada vez, sem ferramentas.
     pub gather_amount: f32,
-    /// Quantas coisas cabem no inventário, de todos os tipos juntos.
+    /// Quantas coisas cabem no inventário, de todos os tipos juntos. As
+    /// ferramentas não contam.
     pub carry: u32,
+    /// Quanto se recolhe de cada vez com a ferramenta certa.
+    pub tool_amount: f32,
+    /// Quantas recolhas aguenta uma ferramenta antes de se partir.
+    pub tool_uses: u32,
+    /// Horas de jogo que fazer uma ferramenta gasta.
+    pub craft_hours: u64,
 }
 
 impl Default for ResourceParams {
@@ -77,10 +134,14 @@ impl Default for ResourceParams {
             rocks: 8,
             tree_wood: 4.0,
             rock_stone: 6.0,
-            tree_regrowth: 0.5,
+            tree_regrowth: 0.1,
+            shelter_wood: 4.0,
             gather_hours: 1,
             gather_amount: 1.0,
             carry: 20,
+            tool_amount: 2.0,
+            tool_uses: 30,
+            craft_hours: 1,
         }
     }
 }
@@ -134,6 +195,8 @@ impl ResourceParams {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Inventory {
     items: BTreeMap<Item, u32>,
+    /// As ferramentas, no máximo uma de cada, com as recolhas que ainda aguentam.
+    tools: BTreeMap<Tool, u32>,
 }
 
 impl Inventory {
@@ -173,6 +236,56 @@ impl Inventory {
     pub fn iter(&self) -> impl Iterator<Item = (Item, u32)> + '_ {
         self.items.iter().map(|(&i, &n)| (i, n))
     }
+
+    /// As recolhas que a ferramenta ainda aguenta (`None` se não a houver).
+    pub fn tool(&self, tool: Tool) -> Option<u32> {
+        self.tools.get(&tool).copied()
+    }
+
+    /// As ferramentas que há, por ordem fixa, com as recolhas que aguentam.
+    pub fn tools(&self) -> impl Iterator<Item = (Tool, u32)> + '_ {
+        self.tools.iter().map(|(&t, &n)| (t, n))
+    }
+
+    /// Faz a ferramenta, se houver os materiais e ainda não a houver.
+    pub fn craft(&mut self, tool: Tool, uses: u32) -> Craft {
+        if self.tools.contains_key(&tool) {
+            return Craft::AlreadyHave;
+        }
+        for (item, n) in tool.recipe() {
+            if self.count(item) < n {
+                return Craft::Missing(item, n - self.count(item));
+            }
+        }
+        for (item, n) in tool.recipe() {
+            self.remove(item, n);
+        }
+        self.tools.insert(tool, uses);
+        Craft::Made
+    }
+
+    /// Gasta uma recolha da ferramenta. Devolve `true` se ela se partiu.
+    pub fn wear(&mut self, tool: Tool) -> bool {
+        let Some(left) = self.tools.get_mut(&tool) else {
+            return false;
+        };
+        *left = left.saturating_sub(1);
+        if *left == 0 {
+            self.tools.remove(&tool);
+            return true;
+        }
+        false
+    }
+}
+
+/// O resultado de tentar fazer uma ferramenta.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Craft {
+    Made,
+    /// Faltam tantas unidades deste material.
+    Missing(Item, u32),
+    /// Já há uma: só se leva uma de cada.
+    AlreadyHave,
 }
 
 #[cfg(test)]
@@ -190,6 +303,35 @@ mod tests {
         assert!(!inv.remove(Item::Stone, 1));
         assert_eq!(inv.count(Item::Stone), 0);
         assert_eq!(inv.iter().collect::<Vec<_>>(), vec![(Item::Wood, 15)]);
+    }
+
+    #[test]
+    fn fazer_um_machado_gasta_madeira_e_pedra() {
+        let mut inv = Inventory::default();
+        inv.add(Item::Wood, 4, 20);
+        inv.add(Item::Stone, 1, 20);
+        assert_eq!(inv.craft(Tool::Axe, 30), Craft::Missing(Item::Stone, 1));
+        assert_eq!(inv.total(), 5, "sem materiais não gasta nada");
+        inv.add(Item::Stone, 1, 20);
+        assert_eq!(inv.craft(Tool::Axe, 30), Craft::Made);
+        assert_eq!((inv.count(Item::Wood), inv.count(Item::Stone)), (1, 0));
+        assert_eq!(inv.tool(Tool::Axe), Some(30));
+        inv.add(Item::Wood, 5, 20);
+        inv.add(Item::Stone, 5, 20);
+        assert_eq!(inv.craft(Tool::Axe, 30), Craft::AlreadyHave);
+    }
+
+    #[test]
+    fn a_ferramenta_parte_se_ao_fim_dos_usos() {
+        let mut inv = Inventory::default();
+        inv.add(Item::Wood, 2, 20);
+        inv.add(Item::Stone, 3, 20);
+        assert_eq!(inv.craft(Tool::Pickaxe, 2), Craft::Made);
+        assert!(!inv.wear(Tool::Pickaxe));
+        assert_eq!(inv.tool(Tool::Pickaxe), Some(1));
+        assert!(inv.wear(Tool::Pickaxe), "à segunda parte-se");
+        assert_eq!(inv.tool(Tool::Pickaxe), None);
+        assert!(!inv.wear(Tool::Pickaxe), "sem ferramenta não há nada para gastar");
     }
 
     #[test]

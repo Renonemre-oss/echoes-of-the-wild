@@ -23,7 +23,7 @@
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
 use crate::region::{AggregateParams, AggregateRegion};
-use crate::resources::{Inventory, Item, Resource};
+use crate::resources::{Craft, Inventory, Item, Resource, Tool};
 use crate::rng::Rng;
 use crate::scent::KINDS;
 use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
@@ -117,8 +117,9 @@ pub struct Landscape {
 /// O resultado de uma tentativa de recolha (`Landscape::gather`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Gather {
-    /// Recolheu isto. Passaram `gather_hours` de jogo.
-    Got(Item, u32),
+    /// Recolheu `amount` de `item`. Passaram `gather_hours` de jogo. Se a
+    /// ferramenta usada se partiu nesta recolha, `broke` diz qual.
+    Got { item: Item, amount: u32, broke: Option<Tool> },
     /// Não há árvore nem pedra ali.
     Nothing,
     /// A árvore ou a pedra ao lado já não tem nada para dar.
@@ -149,7 +150,13 @@ impl Landscape {
                     seed,
                     ..config.clone()
                 });
-                Some(AggregateRegion::from_simulation(&sim, params.clone(), seed))
+                let mut region = AggregateRegion::from_simulation(&sim, params.clone(), seed);
+                // A cabana fica numa clareira, como na simulação de uma região.
+                if let Some(c) = &cabin {
+                    let (ox, oy) = ((id % cols) * REGION, (id / cols) * REGION);
+                    region.resources.retain(|r| !c.in_clearing((ox + r.x, oy + r.y)));
+                }
+                Some(region)
             })
             .collect();
         let player = (player.0.min(cols * REGION - 1), player.1.min(rows * REGION - 1));
@@ -232,9 +239,10 @@ impl Landscape {
     }
 
     /// Recolhe da árvore ou da pedra onde o jogador está, ou de uma das 4
-    /// células ao lado (GDD 12, Fase 1). Cada recolha dá `gather_amount` e
-    /// gasta `gather_hours` de jogo: o mundo continua enquanto ele trabalha.
-    /// Se não houver nada para recolher, ou não couber, não gasta tempo.
+    /// células ao lado (GDD 12, Fase 1). Cada recolha dá `gather_amount`, ou
+    /// `tool_amount` com a ferramenta certa (que se gasta), e gasta
+    /// `gather_hours` de jogo: o mundo continua enquanto ele trabalha. Se não
+    /// houver nada para recolher, ou não couber, não gasta tempo.
     pub fn gather(&mut self) -> Gather {
         let p = self.config.resources.clone();
         let world = &self.window.sim.world;
@@ -252,16 +260,36 @@ impl Landscape {
             return Gather::Empty(first.kind.item());
         };
         let (item, cell) = (r.kind.item(), (r.x, r.y));
-        let n = p.gather_amount as u32;
-        if self.inventory.total() + n > p.carry {
+        let tool = Tool::for_item(item);
+        let with_tool = self.inventory.tool(tool).is_some();
+        let want = if with_tool { p.tool_amount } else { p.gather_amount };
+        // O que o recurso ainda tem e o que cabe no inventário.
+        let space = p.carry.saturating_sub(self.inventory.total());
+        let amount = (want.min(r.amount).floor() as u32).min(space);
+        if amount == 0 {
             return Gather::Full;
         }
-        self.inventory.add(item, n, p.carry);
-        self.window.sim.world.take_resource(cell.0, cell.1, p.gather_amount);
+        self.inventory.add(item, amount, p.carry);
+        self.window.sim.world.take_resource(cell.0, cell.1, amount as f32);
+        let broke = (with_tool && self.inventory.wear(tool)).then_some(tool);
         for _ in 0..p.gather_hours {
             self.step();
         }
-        Gather::Got(item, n)
+        Gather::Got { item, amount, broke }
+    }
+
+    /// Faz uma ferramenta com a madeira e a pedra do inventário (GDD 12,
+    /// Fase 1: "Criar ferramentas básicas"), em qualquer sítio. Gasta
+    /// `craft_hours` de jogo; se faltar material, não gasta nada.
+    pub fn craft(&mut self, tool: Tool) -> Craft {
+        let p = self.config.resources.clone();
+        let result = self.inventory.craft(tool, p.tool_uses);
+        if result == Craft::Made {
+            for _ in 0..p.craft_hours {
+                self.step();
+            }
+        }
+        result
     }
 
     /// Uma região agregada (`None` se estiver na janela).
@@ -798,7 +826,7 @@ mod tests {
             l.window_sim().world.resource_at(local.0, local.1).unwrap().amount
         };
         let antes = madeira(&l);
-        assert_eq!(l.gather(), Gather::Got(Item::Wood, 1));
+        assert_eq!(l.gather(), Gather::Got { item: Item::Wood, amount: 1, broke: None });
         assert_eq!(l.inventory().count(Item::Wood), 1);
         assert_eq!(l.window_sim().tick(), tick + 1);
         let p = ResourceParams::default();
@@ -832,9 +860,75 @@ mod tests {
         let tick = l.window_sim().tick();
         assert_eq!(l.gather(), Gather::Nothing);
         ir_para(&mut l, alvo);
-        assert_eq!(l.gather(), Gather::Got(item, 1));
+        assert_eq!(l.gather(), Gather::Got { item, amount: 1, broke: None });
         assert_eq!(l.gather(), Gather::Full);
         assert_eq!(l.window_sim().tick(), tick + 1, "só a recolha que deu gastou tempo");
+    }
+
+    /// Os recursos deste tipo na janela, em células da paisagem, do mais
+    /// perto do jogador para o mais longe.
+    fn perto(l: &Landscape, kind: ResourceKind, min: f32) -> Vec<(usize, usize)> {
+        let (ox, oy) = l.window_origin();
+        let mut v: Vec<(usize, usize)> = l
+            .window_sim()
+            .world
+            .resources()
+            .iter()
+            .filter(|r| r.kind == kind && r.amount >= min)
+            .map(|r| (ox + r.x, oy + r.y))
+            .collect();
+        v.sort_by_key(|&c| distance(c, l.player()));
+        v
+    }
+
+    /// Recolhe até ter `n` de `item`, de recurso em recurso.
+    fn juntar(l: &mut Landscape, kind: ResourceKind, n: u32) {
+        let item = kind.item();
+        while l.inventory().count(item) < n {
+            let alvo = perto(l, kind, 1.0)[0];
+            ir_para(l, alvo);
+            assert!(matches!(l.gather(), Gather::Got { .. }));
+        }
+    }
+
+    /// GDD 12, Fase 1: com madeira e pedra faz-se um machado, que corta o
+    /// dobro. Sem materiais não se faz nada nem passa tempo.
+    #[test]
+    fn com_machado_recolhe_o_dobro() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let tick = l.window_sim().tick();
+        assert_eq!(l.craft(Tool::Axe), Craft::Missing(Item::Wood, 3));
+        assert_eq!(l.window_sim().tick(), tick);
+        juntar(&mut l, ResourceKind::Tree, 3);
+        juntar(&mut l, ResourceKind::Rock, 2);
+        let tick = l.window_sim().tick();
+        assert_eq!(l.craft(Tool::Axe), Craft::Made);
+        assert_eq!(l.window_sim().tick(), tick + 1, "fazer o machado gasta 1 hora");
+        assert_eq!(l.inventory().tool(Tool::Axe), Some(ResourceParams::default().tool_uses));
+        let madeira = l.inventory().count(Item::Wood);
+        let arvore = perto(&l, ResourceKind::Tree, 4.0)[0];
+        ir_para(&mut l, arvore);
+        assert_eq!(l.gather(), Gather::Got { item: Item::Wood, amount: 2, broke: None });
+        assert_eq!(l.inventory().count(Item::Wood), madeira + 2);
+        assert_eq!(l.inventory().tool(Tool::Axe), Some(ResourceParams::default().tool_uses - 1));
+    }
+
+    /// Ao fim de `tool_uses` recolhas a ferramenta parte-se, e a recolha diz-o.
+    #[test]
+    fn o_machado_parte_se() {
+        let config = Config {
+            seed: 3,
+            resources: ResourceParams { tool_uses: 1, ..ResourceParams::default() },
+            ..Config::default()
+        };
+        let mut l = Landscape::new(config, 3, 3, (36, 36));
+        juntar(&mut l, ResourceKind::Tree, 3);
+        juntar(&mut l, ResourceKind::Rock, 2);
+        assert_eq!(l.craft(Tool::Axe), Craft::Made);
+        let arvore = perto(&l, ResourceKind::Tree, 2.0)[0];
+        ir_para(&mut l, arvore);
+        assert_eq!(l.gather(), Gather::Got { item: Item::Wood, amount: 2, broke: Some(Tool::Axe) });
+        assert_eq!(l.inventory().tool(Tool::Axe), None);
     }
 
     /// Uma árvore cortada volta a crescer, também numa região agregada.

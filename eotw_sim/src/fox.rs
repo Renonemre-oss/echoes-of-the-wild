@@ -74,6 +74,9 @@ pub struct FoxParams {
     pub catch_chance: f32,
     /// Quanto a vegetação cheia reduz a probabilidade de caça (0 = nada, 1 = tudo).
     pub refuge: f32,
+    /// O abrigo de uma árvore, na mesma escala da vegetação (1 = como a erva
+    /// mais alta). Um coelho abrigado tem o maior dos dois.
+    pub tree_refuge: f32,
     pub energy_per_rabbit: f32,
     /// Quantos restos de comida come por tick, e quanta energia dá cada unidade.
     pub scrap_bite: f32,
@@ -127,6 +130,7 @@ impl Default for FoxParams {
             chase_speed: 2,
             catch_chance: 0.5,
             refuge: 0.7,
+            tree_refuge: 0.6,
             energy_per_rabbit: 45.0,
             scrap_bite: 2.0,
             energy_per_scrap: 0.5,
@@ -304,9 +308,11 @@ impl Fox {
     }
 
     /// Tenta apanhar um coelho ao lado. Quanto mais vegetação houver na célula
-    /// do coelho, mais difícil é (refúgio, GDD 7.8).
+    /// do coelho, mais difícil é (refúgio, GDD 7.8). Junto a uma árvore está
+    /// tão abrigado como na erva mais alta.
     fn pounce(&mut self, rabbit: &mut Rabbit, world: &World, rng: &mut Rng, p: &FoxParams) -> bool {
-        let cover = world.biomass_at(rabbit.x, rabbit.y) / world.capacity();
+        let grass = world.biomass_at(rabbit.x, rabbit.y) / world.capacity();
+        let cover = if world.tree_cover(rabbit.x, rabbit.y) { grass.max(p.tree_refuge) } else { grass };
         let chance = p.catch_chance * (1.0 - p.refuge * cover);
         if rng.next_f32() < chance {
             rabbit.eaten = true;
@@ -536,6 +542,31 @@ mod tests {
         let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(!tick.caught);
         assert!(!rabbits[0].eaten);
+    }
+
+    #[test]
+    fn a_arvore_protege_os_coelhos() {
+        use crate::resources::{Resource, ResourceKind};
+        let mut world = mundo();
+        // Duas células sem erva, uma delas ao lado de uma árvore.
+        world.take(0, 1, 1000.0);
+        world.take(6, 7, 1000.0);
+        world.add_resource(Resource { x: 7, y: 7, kind: ResourceKind::Tree, amount: 4.0 });
+        let p = FoxParams::default();
+        let mut rng = Rng::new(9);
+        let (mut expostos, mut abrigados) = (0, 0);
+        for _ in 0..1000 {
+            let mut fox = Fox::newborn(0, 0, 50.0);
+            if fox.act(&mut [Rabbit::newborn(0, 1, 50.0)], &mut world, &mut rng, &p, 0, None).caught {
+                expostos += 1;
+            }
+            let mut fox = Fox::newborn(6, 6, 50.0);
+            if fox.act(&mut [Rabbit::newborn(6, 7, 50.0)], &mut world, &mut rng, &p, 0, None).caught {
+                abrigados += 1;
+            }
+        }
+        // Sem erva, a 50%; junto à árvore, a 50% × (1 − 0,7 × 0,6) = 29%.
+        assert!(abrigados * 3 < expostos * 2, "abrigados {abrigados}, expostos {expostos}");
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use crate::daylight::{self, DaylightParams};
 use crate::fox::{Fox, FoxParams};
 use crate::rabbit::{Rabbit, RabbitParams};
-use crate::resources::ResourceParams;
+use crate::resources::{Resource, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
 use crate::spatial::Grid;
@@ -90,6 +90,13 @@ pub struct CabinParams {
 }
 
 impl CabinParams {
+    /// A cabana fica numa clareira: nenhuma árvore ou pedra abriga a zona
+    /// dela. Uma árvore ao lado da cabana protegia os coelhos que vinham
+    /// pela comida, e as raposas deixavam de caçar lá.
+    pub fn in_clearing(&self, cell: (usize, usize)) -> bool {
+        distance(cell, (self.x, self.y)) <= self.radius + 2 * crate::world::TREE_COVER
+    }
+
     /// Uma cabana no centro de um mapa com estas dimensões.
     pub fn centered(width: usize, height: usize, food_per_day: f32) -> Self {
         Self {
@@ -360,8 +367,11 @@ impl Simulation {
         // As árvores e as pedras têm números à parte: assim o resto do mundo
         // de uma seed é o mesmo que antes de existirem.
         let mut dig = Rng::derived(&[config.seed, STREAM_RESOURCES]);
+        // Sorteiam-se como sem cabana, e só depois se tiram os da clareira:
+        // assim o resto do terreno é o mesmo com e sem cabana.
         let placed = config.resources.place(&mut dig, config.width, config.height, |(x, y)| !world.is_burrow(x, y));
-        for r in placed {
+        let clearing = |r: &Resource| config.cabin.as_ref().is_some_and(|c| c.in_clearing((r.x, r.y)));
+        for r in placed.into_iter().filter(|r| !clearing(r)) {
             world.add_resource(r);
         }
         let mut sim = Self::assemble(config, rng, world, rabbits, Vec::new(), 0);
@@ -528,7 +538,7 @@ impl Simulation {
     pub fn step(&mut self) {
         self.tick += 1;
         self.world.grow();
-        self.config.resources.regrow(self.world.resources_mut(), 1.0 / TICKS_PER_DAY as f32);
+        self.world.regrow_resources(&self.config.resources, 1.0 / TICKS_PER_DAY as f32);
         self.update_scent();
         // Com a luz desta hora, cada animal vê até onde lhe deixa a escuridão.
         let light = self.light();
@@ -1104,6 +1114,50 @@ mod tests {
         assert!(noite > 2.0 * dia, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
     }
 
+    /// GDD 7.1 e 7.7: as árvores são abrigo. Onde se cortam fica uma clareira:
+    /// os coelhos sentem-se expostos e vão comer para outro sítio, por isso lá
+    /// há menos coelhos e a erva cresce mais. Medido nas células que as
+    /// árvores cortadas abrigavam, contra as mesmas seeds sem corte (com 20
+    /// seeds e 30 dias: cerca de -70% de coelhos e mais do dobro da erva).
+    #[test]
+    fn cortar_arvores_afasta_os_coelhos_e_a_erva_cresce() {
+        use crate::resources::ResourceKind;
+        let (mut coelhos, mut erva) = ([0.0f64; 2], [0.0f64; 2]);
+        for seed in 1..=10 {
+            for (i, cortar) in [false, true].into_iter().enumerate() {
+                let mut config = Config {
+                    seed,
+                    ..Config::default()
+                };
+                config.resources.tree_regrowth = 0.0;
+                let mut sim = Simulation::warmed_up(config);
+                let arvores: Vec<(usize, usize)> = sim
+                    .world
+                    .resources()
+                    .iter()
+                    .filter(|r| r.kind == ResourceKind::Tree && r.x < sim.world.width / 2)
+                    .map(|r| (r.x, r.y))
+                    .collect();
+                let zona: Vec<(usize, usize)> =
+                    (0..sim.world.height).flat_map(|y| (0..sim.world.width).map(move |x| (x, y))).filter(|&c| sim.world.tree_cover(c.0, c.1) && c.0 < sim.world.width / 2 + 1).collect();
+                if cortar {
+                    for &(x, y) in &arvores {
+                        sim.world.take_resource(x, y, f32::MAX);
+                    }
+                }
+                for _ in 0..60 * TICKS_PER_DAY {
+                    sim.step();
+                    if sim.tick() % 6 == 0 {
+                        coelhos[i] += sim.rabbits.iter().filter(|r| zona.contains(&(r.x, r.y))).count() as f64;
+                        erva[i] += zona.iter().map(|&(x, y)| sim.world.biomass_at(x, y) as f64).sum::<f64>();
+                    }
+                }
+            }
+        }
+        assert!(coelhos[1] < 0.95 * coelhos[0], "coelhos na zona: {:.0} sem corte, {:.0} com", coelhos[0], coelhos[1]);
+        assert!(erva[1] > 1.05 * erva[0], "erva na zona: {:.0} sem corte, {:.0} com", erva[0], erva[1]);
+    }
+
     /// A medição do teste da cabana funciona: com cabana há visitas, sem
     /// cabana não há. (As raposas visitam tão pouco que, numa seed só, podem
     /// ser zero; por isso só se exige que haja visitas de coelhos.)
@@ -1116,21 +1170,28 @@ mod tests {
         assert_eq!(sem_cabana, 0);
     }
 
-    /// A cabana sem comida não mexe no resto da simulação: é a execução de
-    /// controlo do teste da cabana.
+    /// A cabana sem comida é a execução de controlo do teste da cabana. Só
+    /// muda o terreno: fica numa clareira, sem as árvores e as pedras que a
+    /// abrigavam (ver `CabinParams::in_clearing`), e o resto do terreno é o
+    /// mesmo. Nunca há restos. Antes das árvores, não mudava nada de todo;
+    /// agora as execuções com e sem comida têm as duas a mesma clareira.
     #[test]
-    fn a_cabana_sem_comida_nao_muda_nada() {
+    fn a_cabana_sem_comida_so_muda_a_clareira() {
         let config = Config::default();
+        let cabana = CabinParams::centered(config.width, config.height, 0.0);
         let mut com = Simulation::new(Config {
-            cabin: Some(CabinParams::centered(config.width, config.height, 0.0)),
+            cabin: Some(cabana.clone()),
             ..config.clone()
         });
-        let mut sem = Simulation::new(config);
-        com.run_days(60);
-        sem.run_days(60);
-        let pa: Vec<usize> = com.stats.iter().map(|s| s.rabbits).collect();
-        let pb: Vec<usize> = sem.stats.iter().map(|s| s.rabbits).collect();
-        assert_eq!(pa, pb);
+        let sem = Simulation::new(config);
+        assert_eq!(com.world.burrows(), sem.world.burrows());
+        let fora: Vec<_> = sem.world.resources().iter().filter(|r| !cabana.in_clearing((r.x, r.y))).cloned().collect();
+        assert_eq!(com.world.resources(), &fora[..]);
+        assert!(fora.len() < sem.world.resources().len(), "a clareira devia ter tirado alguma coisa");
+        for _ in 0..60 * TICKS_PER_DAY {
+            com.step();
+            assert_eq!(com.world.scraps_at(cabana.x, cabana.y), 0.0);
+        }
     }
 
     /// O teste da cabana (GDD 18.6): com comida, os animais passam mais tempo

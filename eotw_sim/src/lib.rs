@@ -26,7 +26,7 @@ pub mod world;
 pub use daylight::DaylightParams;
 pub use fox::{Fox, FoxParams};
 pub use rabbit::{Rabbit, RabbitParams};
-pub use resources::{Inventory, Item, Resource, ResourceKind, ResourceParams};
+pub use resources::{Craft, Inventory, Item, Resource, ResourceKind, ResourceParams, Tool};
 pub use rng::Rng;
 pub use scent::{Scent, ScentParams};
 pub use sim::{CabinLog, CabinParams, Config, DayStats, MigrationParams, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};

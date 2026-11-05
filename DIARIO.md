@@ -309,9 +309,98 @@ Segundo passo da etapa 6: o jogador já pode recolher madeira e pedra (GDD 12, F
 - na paisagem: `as_arvores_e_as_pedras_ficam_quando_a_janela_anda`, `recolher_madeira_gasta_uma_hora`, `sem_espaco_ou_sem_recurso_nao_gasta_tempo` e `as_arvores_crescem_nas_regioes_agregadas`;
 - no jogo: `a_tecla_e_recolhe` e `o_painel_explica_a_recolha`.
 
-**Testado no jogo:** a recolha de madeira e de pedra com o E funciona. Fica para rever o tamanho do inventário (20 coisas): só se vai saber quanto deve levar quando houver receitas que gastem madeira e pedra.
+**Testado no jogo:** a recolha de madeira e de pedra com o E funciona. Fica para rever o tamanho do inventário (20 coisas): só se vai saber quanto deve levar quando houver receitas que gastem madeira e pedra. (Mais tarde, as árvores passaram a crescer 0,1 de madeira por dia, em vez de 0,5: ver "As árvores são abrigo".)
 
 **Próximo passo:** as ferramentas e o fabrico (crafting). Por exemplo, um machado de madeira e pedra que recolhe mais depressa.
+
+### Machado e picareta 🪓⛏️
+
+Terceiro passo da etapa 6: as primeiras ferramentas e o primeiro fabrico (GDD 12, Fase 1: "Criar ferramentas básicas").
+
+**O que foi decidido antes de começar:**
+- **Ferramentas:** um machado para a madeira e uma picareta para a pedra.
+- **Efeito:** com a ferramenta certa recolhe-se o dobro, 2 unidades por hora em vez de 1 (GDD 10.5: as ferramentas reduzem o esforço).
+- **Desgaste:** cada ferramenta aguenta 30 recolhas e parte-se. Assim, a madeira e a pedra continuam a ter uso depois de feita a primeira.
+- **Onde:** fabrica-se em qualquer sítio, e cada fabrico gasta 1 hora. A oficina (GDD 10.2) fica para quando houver construção.
+
+**O que foi feito:**
+- **Receitas:** o machado leva 3 madeiras e 2 pedras, e a picareta 2 madeiras e 3 pedras. Leva-se uma de cada no máximo, e não ocupam lugar no inventário.
+- **Fabricar** (`Landscape::craft`): gasta os materiais e 1 hora. Se faltar alguma coisa, diz quanto falta e não gasta nada.
+- **Recolher com ferramenta:** dá 2 unidades, ou menos se o recurso ou o espaço no inventário não chegarem. Cada recolha gasta um uso, e a recolha que parte a ferramenta di-lo.
+- **No jogo:**
+  - **Teclas:** 1 faz o machado e 2 a picareta.
+  - **Painel:** mostra as ferramentas com os usos que restam, e frases como "Para um machado falta 1 de pedra." ou "Recolheste 2 de madeira. O machado partiu-se."
+  - **Letra:** o painel passou de 17 para 15, porque com as linhas novas a legenda deixava de caber.
+
+**Testes novos:**
+- no inventário: `fazer_um_machado_gasta_madeira_e_pedra` e `a_ferramenta_parte_se_ao_fim_dos_usos`;
+- na paisagem: `com_machado_recolhe_o_dobro` (recolhe os materiais, faz o machado e corta 2 madeiras de uma vez) e `o_machado_parte_se`;
+- no jogo: `a_tecla_e_recolhe` (agora também a tecla 1 sem materiais) e `o_painel_explica_a_recolha`.
+
+### As árvores são abrigo 🌳
+
+**Porquê agora:** ao testar as ferramentas, achaste que o jogo estava a lembrar muito o Minecraft. Fazia sentido. A recolha, o inventário e as ferramentas são o ciclo comum dos jogos de sobrevivência, e ainda não tocavam no ecossistema, que é o que o GDD diz que distingue o jogo (7). Por isso, antes do abrigo do jogador, fizemos o passo que liga as duas partes.
+
+**A tua ideia:** cortar uma árvore não mexe na erva, mexe no abrigo. Sem abrigo, os animais deixam de querer estar ali, e a erva cresce mais porque deixa de haver quem a coma. As estações vão mudar isto mais tarde.
+
+**A regra:**
+- **Abrigo:** uma árvore inteira abriga as 9 células à sua volta (ela e as 8 vizinhas). Uma árvore cortada deixa uma clareira até voltar a estar inteira (ver mais abaixo). As pedras não abrigam.
+- **A raposa apanha menos:** um coelho abrigado conta como se estivesse em erva com 60% da altura máxima (`tree_refuge`). Em erva baixa, a raposa passa de 50% para 29% de sucesso.
+- **O coelho prefere o abrigo:** quando muda de célula à procura de erva, uma célula abrigada vale 1 a mais (`cover_bonus`, na escala da erva, que vai de 0 a 10).
+
+**A primeira versão era forte demais.** Com abrigo total (a raposa só apanhava 15%) e bónus 2, o mundo passava a portar-se de maneira diferente consoante o tamanho do mapa:
+
+| | Coelhos (24x24 / 48x48) | Raposas (24x24 / 48x48) |
+|---|---|---|
+| Sem árvores | 264 / 264 | 10,3 / 9,7 |
+| Abrigo forte (1,0, bónus 2) | 248 / 281 | 10,6 / **8,1** |
+| Abrigo suave (0,6, bónus 1) | 255 / 270 | 10,9 / 9,5 |
+
+Os valores de 48x48 são por cada região de 24x24. Isto importava porque a janela do jogo é um mapa grande (72x72) e as regiões agregadas são medidas em 24x24. Com o abrigo forte, a janela ia ter menos raposas do que o resto do mundo, e o teste `uma_regiao_maior_tem_o_mesmo_equilibrio` falhava. Mais bónus também não ajudava: com bónus 10 os coelhos ficavam presos junto às árvores, esgotavam a erva e a população caía para 92.
+
+**Ao testar, o efeito quase não se notava.** Tinha medido com as árvores cortadas sem voltar a crescer, mas no jogo cresciam meia madeira por dia e voltavam a abrigar com 1 de madeira. O efeito desaparecia ao terceiro dia. Mesmo sem crescerem, eram só 10% menos coelhos: numa zona de 3 ou 4 árvores, 2 coelhos a menos no meio de uns 20.
+
+**O que mudou depois do teste:**
+- **As árvores crescem devagar:** 0,1 de madeira por dia, por isso uma árvore cortada leva 40 dias a ficar inteira. Cortar passa a ser uma escolha com consequências.
+- **Só uma árvore inteira abriga.** Basta tirar-lhe 1 de madeira para deixar de abrigar.
+- **Clareiras:** as células à volta de uma árvore cortada que nenhuma árvore inteira abriga são uma clareira. Os coelhos sentem-se expostos e contam a erva de lá com 6 a menos (`clearing_penalty`), tanto para decidir se comem ali como para escolher para onde ir. Num mundo sem cortes não há clareiras, por isso o equilíbrio e a agregada não mudaram: 255 coelhos e 10,9 raposas, como antes das clareiras.
+
+**O efeito de cortar** (20 seeds, a partir do dia 400, a metade esquerda do mapa cortada e as árvores a crescer como no jogo). Foi medido nas células que essas árvores abrigavam, contra as mesmas seeds sem corte:
+
+| Dias depois do corte | Coelhos na zona | Erva na zona |
+|---|---|---|
+| 1 a 3 | −83 a −92% | +14 a +82% |
+| 5 a 11 | −70 a −75% | +114 a +125% |
+| 16 a 30 | −67 a −68% | +126 a +137% |
+
+A erva mais do que duplica porque, com as árvores inteiras, os coelhos juntavam-se lá e rapavam-na. Com a clareira a 3, os coelhos voltavam ao fim de 2 ou 3 semanas (−7% ao dia 30). Com 6, a erva só fica apetecível quando está quase no máximo, e alguns coelhos arriscam voltar.
+
+**Um erro apanhado pelos testes:** na primeira versão das clareiras, o bónus do abrigo também contava para decidir se o coelho comia ali. Os coelhos abrigados comiam a erva até mais baixo, e o mundo sem cortes mudou: 4 testes falharam, incluindo o do choque da agregada (207 coelhos em vez de 315). O bónus passou a contar só para escolher para onde ir.
+
+**A cabana fica numa clareira.** Em 7 das 10 seeds do teste da cabana havia uma árvore a 3 células ou menos dela. Os coelhos que vinham pela comida ficavam abrigados, as raposas deixavam de caçar lá, e os testes da cabana falhavam (620 horas de raposas sem comida contra 3 com comida). Agora não há árvores nem pedras a abrigar a zona da cabana (`CabinParams::in_clearing`), tanto na simulação como na paisagem do jogo. Os recursos sorteiam-se como sem cabana, e só depois se tiram os da clareira, por isso o resto do terreno não muda.
+
+**Um teste mudou de propósito.** `a_cabana_sem_comida_nao_muda_nada` exigia que a cabana sem comida não mudasse nada no mundo. Com a clareira, a cabana muda o terreno. Passou a chamar-se `a_cabana_sem_comida_so_muda_a_clareira` e verifica isso mesmo: só faltam os recursos da clareira, as tocas e o resto do terreno são iguais, e nunca há restos. Os testes da cabana continuam a comparar execuções com e sem comida que têm as duas a mesma clareira. Nenhum limite de teste mudou.
+
+**A agregada foi corrigida.** Com o abrigo, os coelhos juntam-se perto das árvores e comem lá mais a erva. Por isso, com a mesma vegetação média, morrem quase o dobro à fome (0,0012 contra 0,0007 por dia) e têm mais crias (0,0151 contra 0,0142 por adulto). As tabelas foram ajustadas pelo que se mediu: crias ×1,16, fome 0,93 para a direita e reserva −0,02.
+
+| | Completa | Agregada |
+|---|---|---|
+| Coelhos (dias 500 a 900) | 255 | 258 |
+| Raposas | 10,9 | 10,1 |
+| Vegetação | 4,97 | 4,82 |
+| 21 dias depois de perder metade dos coelhos | 315 | 281 |
+
+**Ainda não feito:** numa região agregada, as árvores cortadas pelo jogador voltam a crescer, mas a agregada não sabe que estão cortadas: usa as tabelas de uma região com as árvores inteiras. Como uma árvore leva agora 40 dias a recuperar, isto conta mais: se o jogador cortar uma zona e se afastar, a região agregada não tem as clareiras. Fica para resolver se se notar.
+
+**Testes novos:**
+- no terreno: `a_arvore_abriga_ate_ser_cortada` (também a clareira);
+- na raposa: `a_arvore_protege_os_coelhos`;
+- no coelho: `com_a_mesma_erva_prefere_o_abrigo`;
+- na simulação: `cortar_arvores_afasta_os_coelhos_e_a_erva_cresce` (10 seeds e 60 dias, no sítio do corte).
+
+**O que se aprendeu:** um efeito que parece local pode mudar o mundo inteiro, e de maneira diferente em mapas de tamanhos diferentes. Vale a pena medir sempre nos dois tamanhos.
+
+**Próximo passo:** o abrigo do jogador (construção).
 
 ## 2026-11-02 (segunda-feira)
 

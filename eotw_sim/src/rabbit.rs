@@ -65,6 +65,15 @@ pub struct RabbitParams {
     /// vegetação cheia à volta) do que caçados. Tem de ficar abaixo de
     /// `newborn_energy`.
     pub desperate_energy: f32,
+    /// Quanto vale, ao escolher para onde ir comer, uma célula abrigada por
+    /// uma árvore (na mesma escala da vegetação, 0 a `capacity`). Onde se
+    /// cortam árvores, os coelhos passam a ir menos e a erva cresce mais.
+    pub cover_bonus: f32,
+    /// Quanto vale a menos a erva numa clareira (à volta de uma árvore
+    /// cortada), para decidir se come ali e para onde ir. Os coelhos sentem-se
+    /// expostos e vão comer para outro sítio. Num mundo sem cortes não há
+    /// clareiras, por isso isto não mexe no equilíbrio.
+    pub clearing_penalty: f32,
     /// O cheiro de comida mais fraco que o coelho sente (GDD 7.6: olfato médio).
     /// Com os valores atuais de `ScentParams`, chega a cerca de 7 células da cabana.
     pub smell_min: f32,
@@ -99,6 +108,8 @@ impl Default for RabbitParams {
             rest_cap: 60.0,
             desperate_energy: 30.0,
             smell_min: 1.0,
+            cover_bonus: 1.0,
+            clearing_penalty: 6.0,
         }
     }
 }
@@ -181,7 +192,7 @@ impl Rabbit {
             if world.scraps_at(self.x, self.y) > 0.0 {
                 let eaten = world.take_scraps(self.x, self.y, p.bite);
                 self.energy = (self.energy + eaten * p.energy_per_biomass).min(p.energy_max);
-            } else if world.biomass_at(self.x, self.y) >= p.min_food {
+            } else if edible(world, (self.x, self.y), p) >= p.min_food {
                 let here = world.biomass_at(self.x, self.y);
                 // Resposta funcional: come menos quando a comida é escassa.
                 let wanted = p.bite * here / (here + p.half_saturation);
@@ -192,7 +203,7 @@ impl Rabbit {
                 // vizinha tiver comida que chegue. Ao contrário, os coelhos ficavam
                 // presos junto à cabana depois de os restos acabarem (o cheiro dura
                 // dias), a morrer de fome com erva cheia a duas células.
-                let grass = choose_move(world, rng, self.x, self.y);
+                let grass = choose_move(world, rng, self.x, self.y, p);
                 let (nx, ny) = if world.biomass_at(grass.0, grass.1) >= p.min_food {
                     grass
                 } else {
@@ -230,13 +241,32 @@ fn nearest_threat(
         .min_by_key(|&f| distance(f, me))
 }
 
-/// Escolhe a célula vizinha com mais vegetação. Um pouco de ruído aleatório
-/// faz com que, onde não há nada, o coelho deambule em vez de ficar parado.
-fn choose_move(world: &World, rng: &mut Rng, x: usize, y: usize) -> (usize, usize) {
+/// A erva que o coelho conta para decidir se come ali: numa clareira vale
+/// `clearing_penalty` a menos, porque ele se sente exposto.
+fn edible(world: &World, (x, y): (usize, usize), p: &RabbitParams) -> f32 {
+    let grass = world.biomass_at(x, y);
+    if world.clearing(x, y) {
+        grass - p.clearing_penalty
+    } else {
+        grass
+    }
+}
+
+/// O que uma célula vale para ir lá comer: `edible`, mais `cover_bonus` se
+/// uma árvore a abriga.
+fn appeal(world: &World, cell: (usize, usize), p: &RabbitParams) -> f32 {
+    let bonus = if world.tree_cover(cell.0, cell.1) { p.cover_bonus } else { 0.0 };
+    edible(world, cell, p) + bonus
+}
+
+/// Escolhe a célula vizinha que vale mais para comer (`appeal`). Um pouco
+/// de ruído aleatório faz com que, onde não há nada, o coelho deambule em
+/// vez de ficar parado.
+fn choose_move(world: &World, rng: &mut Rng, x: usize, y: usize, p: &RabbitParams) -> (usize, usize) {
     let mut best = (x, y);
     let mut best_score = f32::MIN;
     for (nx, ny) in world.neighbors(x, y).into_iter().flatten() {
-        let score = world.biomass_at(nx, ny) + rng.range_f32(0.0, 1.0);
+        let score = appeal(world, (nx, ny), p) + rng.range_f32(0.0, 1.0);
         if score > best_score {
             best_score = score;
             best = (nx, ny);
@@ -372,6 +402,32 @@ mod tests {
         let antes = world.biomass_at(5, 5);
         coelho.act(&mut world, &mut rng, &RabbitParams::default(), &[]);
         assert!(world.biomass_at(5, 5) < antes);
+    }
+
+    /// Com a mesma erva à volta, o coelho com fome vai para a célula
+    /// abrigada por uma árvore.
+    #[test]
+    fn com_a_mesma_erva_prefere_o_abrigo() {
+        use crate::resources::{Resource, ResourceKind};
+        let mut abrigo = 0;
+        for seed in 0..200 {
+            let mut rng = Rng::new(seed);
+            let mut world = World::new(12, 12, VegetationParams::default(), &mut rng);
+            for y in 0..12 {
+                for x in 0..12 {
+                    world.set_biomass(x, y, if (x, y) == (5, 5) { 0.0 } else { 5.0 });
+                }
+            }
+            // A árvore abriga (6, 5), a vizinha da direita, e não as outras.
+            world.add_resource(Resource { x: 7, y: 5, kind: ResourceKind::Tree, amount: 4.0 });
+            let mut coelho = Rabbit::newborn(5, 5, 50.0);
+            coelho.act(&mut world, &mut rng, &RabbitParams::default(), &[]);
+            if (coelho.x, coelho.y) == (6, 5) {
+                abrigo += 1;
+            }
+        }
+        // Ao acaso seria 1 em 4 (50); com o abrigo, muito mais.
+        assert!(abrigo > 100, "foi para o abrigo {abrigo} vezes em 200");
     }
 
     #[test]

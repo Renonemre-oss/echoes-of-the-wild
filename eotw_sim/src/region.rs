@@ -58,6 +58,14 @@ pub struct AggregateParams {
     /// energia média também não chegava (sobe só de 44 para 49). O que as
     /// prevê é quantos coelhos já passaram do descanso e estão a caminho de
     /// `repro_threshold`.
+    ///
+    /// Com o abrigo das árvores, as tabelas das crias, da reserva e da fome
+    /// foram corrigidas pelo que se mediu na completa em equilíbrio. Os
+    /// coelhos juntam-se perto das árvores e comem lá mais a erva, por isso,
+    /// com a mesma vegetação média, morrem quase o dobro à fome (0,0012 por
+    /// dia com 5,0 de vegetação) e têm mais crias (0,0151 por adulto com 10%
+    /// de reserva). As crias foram multiplicadas por 1,16, a fome passou 0,93
+    /// para a direita e a reserva desceu 0,02.
     pub births: Vec<(f32, f32)>,
     /// A reserva para onde os coelhos caminham, pela erva por coelho (a
     /// vegetação de toda a região a dividir pelos coelhos).
@@ -113,47 +121,47 @@ impl Default for AggregateParams {
     fn default() -> Self {
         Self {
             births: vec![
-                (0.03, 0.0054),
-                (0.05, 0.0081),
-                (0.07, 0.0100),
-                (0.09, 0.0118),
-                (0.11, 0.0134),
-                (0.13, 0.0145),
-                (0.15, 0.0159),
-                (0.17, 0.0183),
-                (0.19, 0.0216),
-                (0.21, 0.0282),
-                (0.23, 0.0375),
-                (0.25, 0.0555),
-                (0.27, 0.0701),
-                (0.29, 0.0761),
-                (0.31, 0.0907),
-                (0.35, 0.1008),
-                (0.50, 0.20),
+                (0.03, 0.0063),
+                (0.05, 0.0094),
+                (0.07, 0.0116),
+                (0.09, 0.0137),
+                (0.11, 0.0155),
+                (0.13, 0.0168),
+                (0.15, 0.0184),
+                (0.17, 0.0212),
+                (0.19, 0.0251),
+                (0.21, 0.0327),
+                (0.23, 0.0435),
+                (0.25, 0.0644),
+                (0.27, 0.0813),
+                (0.29, 0.0883),
+                (0.31, 0.1052),
+                (0.35, 0.1169),
+                (0.50, 0.2000),
             ],
             reserve_target: vec![
-                (5.0, 0.13),
-                (10.0, 0.12),
-                (14.0, 0.22),
-                (18.0, 0.29),
-                (24.0, 0.34),
-                (35.0, 0.37),
+                (5.0, 0.11),
+                (10.0, 0.10),
+                (14.0, 0.20),
+                (18.0, 0.27),
+                (24.0, 0.32),
+                (35.0, 0.35),
             ],
             reserve_rate: 0.3,
             hunger: vec![
-                (2.5, 0.03),
-                (2.875, 0.0118),
-                (3.125, 0.0074),
-                (3.375, 0.0048),
-                (3.625, 0.0030),
-                (3.875, 0.0016),
-                (4.125, 0.0010),
-                (4.375, 0.0008),
-                (4.625, 0.0005),
-                (4.875, 0.0003),
-                (5.125, 0.0002),
-                (5.5, 0.0001),
-                (6.0, 0.0),
+                (3.430, 0.0300),
+                (3.805, 0.0118),
+                (4.055, 0.0074),
+                (4.305, 0.0048),
+                (4.555, 0.0030),
+                (4.805, 0.0016),
+                (5.055, 0.0010),
+                (5.305, 0.0008),
+                (5.555, 0.0005),
+                (5.805, 0.0003),
+                (6.055, 0.0002),
+                (6.430, 0.0001),
+                (6.930, 0.0000),
             ],
             prey_per_fox: 0.205,
             fox_births: vec![

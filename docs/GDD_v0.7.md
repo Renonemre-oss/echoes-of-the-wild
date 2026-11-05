@@ -511,6 +511,8 @@ A cadeia ecológica da secção 7.2 só tem consequências reais se a vegetaçã
 - A biomassa regenera-se com uma curva logística: cresce devagar quando está muito baixa, mais depressa a meio, e estabiliza perto da capacidade.
 - Os herbívoros consomem biomassa da célula onde estão. Se a biomassa ficar abaixo de um limiar durante demasiado tempo, a capacidade da célula baixa temporariamente (sobrepastoreio) e recupera devagar quando a pressão desaparece.
 - Árvores e recursos que o jogador corta são entidades separadas. Desflorestar reduz o abrigo e a capacidade das células à volta.
+
+  **No Prototype 01 (etapa 6):** cortar só reduz o abrigo, e não a capacidade da erva. Uma árvore inteira abriga as 9 células à sua volta. A raposa apanha um coelho abrigado como se ele estivesse em erva com 60% da altura máxima, e o coelho, ao procurar erva, prefere as células abrigadas. À volta de uma árvore cortada fica uma clareira, onde os coelhos se sentem expostos e contam a erva com 6 a menos. A árvore leva 40 dias a voltar a ficar inteira. Na zona cortada há cerca de 70% menos coelhos e mais do dobro da erva durante esse tempo. Num mundo sem cortes não há clareiras, por isso o equilíbrio não muda. A cabana fica numa clareira própria, sem árvores à volta. Um abrigo mais forte tornava o mundo diferente consoante o tamanho do mapa (menos 17% de raposas em 48x48).
 - Plantações são células com biomassa de alto valor, o que explica porque atraem herbívoros e, indiretamente, predadores.
 - Frutos sazonais ficam para uma fase posterior.
 
@@ -742,7 +744,7 @@ Categorias iniciais propostas:
 
 As receitas específicas, níveis de qualidade e árvore de tecnologia ainda estão por definir.
 
-**No Prototype 01 (etapa 6):** cada região de 24x24 tem 20 árvores (4 madeiras, que voltam a crescer meia madeira por dia) e 8 pedras (6 pedras, que não voltam), sorteadas com números à parte para não mudarem o resto do mundo (`resources.rs`). O jogador recolhe com a tecla E, na célula onde está ou numa das 4 ao lado: 1 unidade por recolha, e cada recolha gasta uma hora de jogo. O inventário leva 20 coisas. Por agora, cortar árvores não mexe na erva nem no abrigo dos animais (7.7): isso fica para quando houver machado.
+**No Prototype 01 (etapa 6):** cada região de 24x24 tem 20 árvores (4 madeiras, que voltam a crescer 0,1 de madeira por dia) e 8 pedras (6 pedras, que não voltam), sorteadas com números à parte para não mudarem o resto do mundo (`resources.rs`). O jogador recolhe com a tecla E, na célula onde está ou numa das 4 ao lado: 1 unidade por recolha, e cada recolha gasta uma hora de jogo. O inventário leva 20 coisas. Por agora, cortar árvores não mexe na erva nem no abrigo dos animais (7.7). As primeiras ferramentas são o machado (3 madeiras e 2 pedras) e a picareta (2 madeiras e 3 pedras). Fazem-se em qualquer sítio e cada uma gasta 1 hora. Com a ferramenta certa recolhem-se 2 unidades por hora em vez de 1, e cada ferramenta parte-se ao fim de 30 recolhas.
 
 ## 10.5. Evitar o grind
 
