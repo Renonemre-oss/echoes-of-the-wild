@@ -16,6 +16,9 @@ use crate::rng::Rng;
 pub enum Item {
     Wood,
     Stone,
+    /// Folhas e erva seca, para cobrir o abrigo e fazer a cama. Recolhem-se
+    /// da erva, onde não há árvore nem pedra.
+    Leaves,
 }
 
 impl Item {
@@ -23,6 +26,7 @@ impl Item {
         match self {
             Item::Wood => "madeira",
             Item::Stone => "pedra",
+            Item::Leaves => "folhas",
         }
     }
 }
@@ -61,11 +65,12 @@ impl Tool {
         }
     }
 
-    /// O recurso que recolhe melhor.
-    pub fn for_item(item: Item) -> Tool {
+    /// A ferramenta que recolhe melhor este material (nenhuma para as folhas).
+    pub fn for_item(item: Item) -> Option<Tool> {
         match item {
-            Item::Wood => Tool::Axe,
-            Item::Stone => Tool::Pickaxe,
+            Item::Wood => Some(Tool::Axe),
+            Item::Stone => Some(Tool::Pickaxe),
+            Item::Leaves => None,
         }
     }
 }
@@ -232,7 +237,7 @@ impl Inventory {
         true
     }
 
-    /// O que há, por ordem fixa: madeira e depois pedra.
+    /// O que há, por ordem fixa: madeira, pedra e folhas.
     pub fn iter(&self) -> impl Iterator<Item = (Item, u32)> + '_ {
         self.items.iter().map(|(&i, &n)| (i, n))
     }

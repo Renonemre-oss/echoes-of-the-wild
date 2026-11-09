@@ -22,7 +22,7 @@ use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Gather, Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{Breeding, CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Tool, TICKS_PER_DAY};
+use eotw_sim::{Breeding, Build, CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Stage, Tool, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -445,6 +445,39 @@ fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: R
             note.0 = craft_note(tool, world.0.craft(tool));
         }
     }
+    if keys.just_pressed(KeyCode::KeyB) {
+        let hours = world.0.window_sim().config().shelter.hours;
+        note.0 = build_note(world.0.build(), hours);
+    }
+}
+
+/// A frase do painel para o resultado de uma construção.
+fn build_note(result: Build, hours: [u64; 4]) -> String {
+    match result {
+        Build::Built(stage) => format!("Fizeste {} ({} horas).", stage.with_article(), hours[stage as usize]),
+        Build::Missing(stage, item, n) => format!("Para {} falta {n} de {}.", stage.with_article(), item.name()),
+        Build::NeedsTree => "O primeiro abrigo encosta-se a uma árvore: põe-te ao lado de uma.".into(),
+        Build::Blocked => "Aqui não se constrói: há uma árvore, uma pedra ou uma toca.".into(),
+        Build::Elsewhere => "Já tens um abrigo: as melhorias fazem-se lá.".into(),
+        Build::Finished => "O abrigo já tem lareira: está acabado.".into(),
+    }
+}
+
+/// O abrigo e o que falta para a etapa seguinte, para o painel.
+fn shelter_line(land: &Landscape) -> String {
+    let p = &land.window_sim().config().shelter;
+    let (now, next) = match land.shelter() {
+        None => ("ainda não tens".to_string(), Some(Stage::Ramos)),
+        Some(s) => (s.stage.name().to_string(), s.stage.next()),
+    };
+    let next = match next {
+        None => String::new(),
+        Some(stage) => {
+            let cost: Vec<String> = p.cost_of(stage).iter().map(|(item, n)| format!("{n} de {}", item.name())).collect();
+            format!(" (B: {}, {})", stage.name(), cost.join(" e "))
+        }
+    };
+    format!("Abrigo: {now}{next}")
 }
 
 /// A frase do painel para o resultado de um fabrico.
@@ -475,7 +508,7 @@ fn gather_note(result: Gather) -> String {
             let article = if tool == Tool::Axe { "O" } else { "A" };
             format!("Recolheste {amount} de {}. {article} {} partiu-se.", item.name(), tool.name())
         }
-        Gather::Nothing => "Não há árvore nem pedra aqui ao lado.".into(),
+        Gather::Nothing => "Não há árvore nem pedra aqui ao lado, nem erva para folhas.".into(),
         Gather::Empty(item) => format!("Já não há {} aqui.", item.name()),
         Gather::Full => "O inventário está cheio.".into(),
     }
@@ -597,6 +630,16 @@ fn draw_animals(
     if let Some(c) = land.cabin() {
         items.push(mark((c.x as i64, c.y as i64), Color::srgb(0.55, 0.38, 0.22), CELL * 0.9, 1.5));
     }
+    // O abrigo cresce e escurece a cada etapa; com lareira fica avermelhado.
+    if let Some(s) = land.shelter() {
+        let (color, size) = match s.stage {
+            Stage::Ramos => (Color::srgb(0.62, 0.52, 0.30), 0.55),
+            Stage::Folhas => (Color::srgb(0.70, 0.55, 0.20), 0.7),
+            Stage::BasePedra => (Color::srgb(0.50, 0.46, 0.40), 0.85),
+            Stage::Lareira => (Color::srgb(0.72, 0.30, 0.15), 0.95),
+        };
+        items.push(mark((s.x as i64, s.y as i64), color, CELL * size, 1.5));
+    }
     // As árvores e as pedras encolhem à medida que se recolhem. Uma árvore
     // cortada fica pequena até voltar a crescer; uma pedra gasta desaparece.
     let rp = &sim.config().resources;
@@ -685,9 +728,9 @@ fn draw_panel(
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
          No mundo: {} coelhos, {} raposas\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
-         {}{}\n\n\
-         Setas ou WASD: andar\nE: recolher (1 hora)\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
-         Legenda:\n  quadrado azul: tu\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
+         {}\n{}{}\n\n\
+         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
+         Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde escuro: árvore (abrigo)\n  cinzento: pedra\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
@@ -708,6 +751,7 @@ fn draw_panel(
         sim.world.mean_biomass(),
         sim.world.capacity(),
         inventory_line(land),
+        shelter_line(land),
         if note.0.is_empty() { String::new() } else { format!("\n{}", note.0) },
         if smell.0 { "ligado: azul é o teu rasto, amarelo a comida" } else { "desligado" },
         if log.is_empty() { String::new() } else { format!("\n\nCabana:{log}") },
@@ -889,7 +933,7 @@ mod tests {
     #[test]
     fn o_painel_explica_a_recolha() {
         use eotw_sim::Item;
-        assert_eq!(gather_note(Gather::Nothing), "Não há árvore nem pedra aqui ao lado.");
+        assert_eq!(gather_note(Gather::Nothing), "Não há árvore nem pedra aqui ao lado, nem erva para folhas.");
         assert_eq!(gather_note(Gather::Empty(Item::Wood)), "Já não há madeira aqui.");
         assert_eq!(gather_note(Gather::Full), "O inventário está cheio.");
         let partiu = Gather::Got { item: Item::Wood, amount: 2, broke: Some(Tool::Axe) };
@@ -1042,5 +1086,15 @@ mod tests {
         assert_eq!(app.world().get::<Transform>(ids[0]).unwrap().translation.truncate(), cell_to_screen(2, 3));
         assert_eq!(*app.world().get::<Visibility>(ids[0]).unwrap(), Visibility::Visible);
         assert_eq!(*app.world().get::<Visibility>(ids[1]).unwrap(), Visibility::Hidden);
+    }
+
+    #[test]
+    fn o_painel_explica_a_construcao() {
+        let horas = [2, 3, 6, 4];
+        assert_eq!(build_note(Build::Built(Stage::Ramos), horas), "Fizeste o abrigo de ramos (2 horas).");
+        assert_eq!(
+            build_note(Build::Missing(Stage::Folhas, eotw_sim::Item::Leaves, 4), horas),
+            "Para a cabana de folhas falta 4 de folhas."
+        );
     }
 }

@@ -26,6 +26,7 @@ use crate::region::{AggregateParams, AggregateRegion};
 use crate::resources::{Craft, Inventory, Item, Resource, Tool};
 use crate::rng::Rng;
 use crate::scent::KINDS;
+use crate::shelter::{Build, Shelter, Stage};
 use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
 use crate::world::{distance, World};
 
@@ -112,6 +113,9 @@ pub struct Landscape {
     pub crossings: usize,
     /// O que o jogador leva consigo.
     inventory: Inventory,
+    /// O abrigo que o jogador construiu, em células da paisagem inteira.
+    /// Começa sem nenhum.
+    shelter: Option<Shelter>,
 }
 
 /// O resultado de uma tentativa de recolha (`Landscape::gather`).
@@ -190,6 +194,7 @@ impl Landscape {
             events: Vec::new(),
             crossings: 0,
             inventory: Inventory::default(),
+            shelter: None,
         };
         // Sem janela ainda, todas as regiões são agregadas.
         for _ in 0..WARMUP_DAYS {
@@ -238,6 +243,10 @@ impl Landscape {
         &self.inventory
     }
 
+    pub fn shelter(&self) -> Option<&Shelter> {
+        self.shelter.as_ref()
+    }
+
     /// Recolhe da árvore ou da pedra onde o jogador está, ou de uma das 4
     /// células ao lado (GDD 12, Fase 1). Cada recolha dá `gather_amount`, ou
     /// `tool_amount` com a ferramenta certa (que se gasta), e gasta
@@ -254,14 +263,14 @@ impl Landscape {
             .collect();
         let found: Vec<&Resource> = near.iter().filter_map(|&(x, y)| world.resource_at(x, y)).collect();
         let Some(first) = found.first() else {
-            return Gather::Nothing;
+            return self.gather_leaves(here);
         };
         let Some(r) = found.iter().find(|r| r.amount >= p.gather_amount) else {
             return Gather::Empty(first.kind.item());
         };
         let (item, cell) = (r.kind.item(), (r.x, r.y));
-        let tool = Tool::for_item(item);
-        let with_tool = self.inventory.tool(tool).is_some();
+        let tool = Tool::for_item(item).filter(|&t| self.inventory.tool(t).is_some());
+        let with_tool = tool.is_some();
         let want = if with_tool { p.tool_amount } else { p.gather_amount };
         // O que o recurso ainda tem e o que cabe no inventário.
         let space = p.carry.saturating_sub(self.inventory.total());
@@ -271,7 +280,7 @@ impl Landscape {
         }
         self.inventory.add(item, amount, p.carry);
         self.window.sim.world.take_resource(cell.0, cell.1, amount as f32);
-        let broke = (with_tool && self.inventory.wear(tool)).then_some(tool);
+        let broke = tool.filter(|&t| self.inventory.wear(t));
         for _ in 0..p.gather_hours {
             self.step();
         }
@@ -290,6 +299,71 @@ impl Landscape {
             }
         }
         result
+    }
+
+    /// Recolhe folhas e erva seca da célula do jogador, onde não há árvore nem
+    /// pedra. Gasta `leaf_biomass` de vegetação por folha, por isso tirar
+    /// folhas tira comida aos coelhos.
+    fn gather_leaves(&mut self, here: (usize, usize)) -> Gather {
+        let p = self.config.resources.clone();
+        let per_leaf = self.config.shelter.leaf_biomass;
+        if self.window.sim.world.biomass_at(here.0, here.1) < per_leaf {
+            return Gather::Nothing;
+        }
+        if self.inventory.add(Item::Leaves, p.gather_amount as u32, p.carry) == 0 {
+            return Gather::Full;
+        }
+        self.window.sim.world.take(here.0, here.1, per_leaf * p.gather_amount);
+        for _ in 0..p.gather_hours {
+            self.step();
+        }
+        Gather::Got { item: Item::Leaves, amount: p.gather_amount as u32, broke: None }
+    }
+
+    /// Constrói o abrigo ou a etapa seguinte dele (ver `shelter.rs`). O
+    /// primeiro abrigo fica na célula do jogador e tem de ter uma árvore ao
+    /// lado, porque é um abrigo de ramos encostado a ela. As etapas seguintes
+    /// constroem-se no mesmo sítio. Gasta o material e as horas da etapa; se
+    /// faltar alguma coisa, não gasta nada.
+    pub fn build(&mut self) -> Build {
+        let p = self.config.shelter.clone();
+        let stage = match self.shelter {
+            None => {
+                let Some(here) = self.in_window(self.player) else {
+                    return Build::Blocked;
+                };
+                let world = &self.window.sim.world;
+                if world.resource_at(here.0, here.1).is_some() || world.is_burrow(here.0, here.1) {
+                    return Build::Blocked;
+                }
+                let tree = world.neighbors(here.0, here.1).into_iter().flatten().any(|(x, y)| {
+                    world.resource_at(x, y).is_some_and(|r| r.kind == crate::resources::ResourceKind::Tree)
+                });
+                if !tree {
+                    return Build::NeedsTree;
+                }
+                Stage::Ramos
+            }
+            Some(s) if (s.x, s.y) != self.player => return Build::Elsewhere,
+            Some(s) => match s.stage.next() {
+                Some(next) => next,
+                None => return Build::Finished,
+            },
+        };
+        let cost = p.cost_of(stage);
+        if let Some(&(item, n)) = cost.iter().find(|&&(item, n)| self.inventory.count(item) < n) {
+            return Build::Missing(stage, item, n - self.inventory.count(item));
+        }
+        for &(item, n) in cost {
+            self.inventory.remove(item, n);
+        }
+        let (x, y) = self.player;
+        self.shelter = Some(Shelter { x, y, stage });
+        self.place_player_in_window();
+        for _ in 0..p.hours_of(stage) {
+            self.step();
+        }
+        Build::Built(stage)
     }
 
     /// Uma região agregada (`None` se estiver na janela).
@@ -363,9 +437,15 @@ impl Landscape {
         }
     }
 
+    /// Põe o jogador e o abrigo na simulação da janela. O abrigo só cheira
+    /// quando está dentro dela.
     fn place_player_in_window(&mut self) {
         let (ox, oy) = self.window_origin();
         self.window.sim.place_player(Some((self.player.0 - ox, self.player.1 - oy)));
+        let p = &self.config.shelter;
+        self.window.sim.camp = self
+            .shelter
+            .and_then(|s| self.in_window((s.x, s.y)).map(|cell| (cell, p.scent_of(s.stage))));
     }
 
     /// As regiões da janela: a do meio e as vizinhas que existem.
@@ -713,6 +793,7 @@ fn binomial(rng: &mut Rng, n: usize, p: f32) -> usize {
 mod tests {
     use super::*;
     use crate::resources::{ResourceKind, ResourceParams};
+    use crate::shelter::ShelterParams;
 
     fn paisagem(seed: u64, lado: usize, jogador: (usize, usize)) -> Landscape {
         Landscape::new(
@@ -788,6 +869,122 @@ mod tests {
         }
     }
 
+    /// Uma célula livre (sem recurso nem toca) ao lado de uma árvore, em
+    /// células da paisagem, a mais perto de `de`.
+    fn ao_lado_de_arvore(l: &Landscape, de: (usize, usize)) -> (usize, usize) {
+        let (ox, oy) = l.window_origin();
+        let w = &l.window_sim().world;
+        let livre = |(x, y): (usize, usize)| w.resource_at(x, y).is_none() && !w.is_burrow(x, y);
+        w.resources()
+            .iter()
+            .filter(|r| r.kind == ResourceKind::Tree)
+            .flat_map(|r| w.neighbors(r.x, r.y).into_iter().flatten())
+            .filter(|&c| livre(c))
+            .map(|(x, y)| (ox + x, oy + y))
+            .min_by_key(|&c| distance(c, de))
+            .unwrap()
+    }
+
+    fn dar(l: &mut Landscape, item: Item, n: u32) {
+        l.inventory.add(item, n, u32::MAX);
+    }
+
+    /// O primeiro abrigo é de ramos encostados a uma árvore: longe das
+    /// árvores não dá, e sem madeira também não.
+    #[test]
+    fn o_primeiro_abrigo_precisa_de_uma_arvore_e_de_madeira() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let (ox, oy) = l.window_origin();
+        let w = &l.window_sim().world;
+        let sem_arvore = (0..w.height)
+            .flat_map(|y| (0..w.width).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                let perto = std::iter::once((x, y)).chain(w.neighbors(x, y).into_iter().flatten());
+                perto.into_iter().all(|(a, b)| w.resource_at(a, b).is_none()) && !w.is_burrow(x, y)
+            })
+            .map(|(x, y)| (ox + x, oy + y))
+            .unwrap();
+        ir_para(&mut l, sem_arvore);
+        dar(&mut l, Item::Wood, 6);
+        assert_eq!(l.build(), Build::NeedsTree);
+
+        let lado = ao_lado_de_arvore(&l, (36, 36));
+        ir_para(&mut l, lado);
+        l.inventory.remove(Item::Wood, 2);
+        assert_eq!(l.build(), Build::Missing(Stage::Ramos, Item::Wood, 2));
+        assert!(l.shelter().is_none());
+
+        dar(&mut l, Item::Wood, 2);
+        let tick = l.window_sim().tick();
+        assert_eq!(l.build(), Build::Built(Stage::Ramos));
+        assert_eq!(l.window_sim().tick(), tick + 2, "o abrigo de ramos leva 2 horas");
+        assert_eq!(l.inventory().count(Item::Wood), 0);
+        assert_eq!(l.shelter().map(|s| (s.x, s.y, s.stage)), Some((lado.0, lado.1, Stage::Ramos)));
+    }
+
+    /// As melhorias fazem-se no mesmo sítio, uma de cada vez, até à lareira.
+    #[test]
+    fn as_etapas_constroem_se_no_mesmo_sitio() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let lado = ao_lado_de_arvore(&l, (36, 36));
+        ir_para(&mut l, lado);
+        dar(&mut l, Item::Wood, 12);
+        dar(&mut l, Item::Leaves, 10);
+        dar(&mut l, Item::Stone, 14);
+        let mut feitas = Vec::new();
+        while let Build::Built(stage) = l.build() {
+            feitas.push(stage);
+        }
+        assert_eq!(feitas, Stage::ALL);
+        assert_eq!(l.build(), Build::Finished);
+        assert_eq!(l.inventory().total(), 0, "gastou tudo o que as quatro etapas pedem");
+
+        l.move_player(1, 0);
+        assert_eq!(l.build(), Build::Elsewhere, "só há um abrigo");
+    }
+
+    /// O abrigo deixa cheiro humano mesmo sem o jogador lá, e deixa de o pôr
+    /// na simulação quando sai da janela.
+    #[test]
+    fn o_abrigo_cheira_a_gente() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let lado = ao_lado_de_arvore(&l, (36, 36));
+        ir_para(&mut l, lado);
+        dar(&mut l, Item::Wood, 6);
+        assert_eq!(l.build(), Build::Built(Stage::Ramos));
+        let local = l.in_window(lado).unwrap();
+        let p = ShelterParams::default();
+        assert_eq!(l.window_sim().camp, Some((local, p.scent_of(Stage::Ramos))));
+        assert!(l.window_sim().world.scent.at(crate::scent::Scent::Human, local.0, local.1) > 0.0);
+
+        ir_para(&mut l, (lado.0 + 3 * REGION / 2, lado.1));
+        if l.in_window(lado).is_none() {
+            assert_eq!(l.window_sim().camp, None);
+        }
+    }
+
+    /// Onde não há árvore nem pedra, recolher dá folhas e gasta erva.
+    #[test]
+    fn recolher_folhas_gasta_erva() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let p = ShelterParams::default();
+        let (ox, oy) = l.window_origin();
+        let w = &l.window_sim().world;
+        let erva = (0..w.height)
+            .flat_map(|y| (0..w.width).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                let perto = std::iter::once((x, y)).chain(w.neighbors(x, y).into_iter().flatten());
+                perto.into_iter().all(|(a, b)| w.resource_at(a, b).is_none()) && w.biomass_at(x, y) >= 2.0 * p.leaf_biomass
+            })
+            .unwrap();
+        ir_para(&mut l, (ox + erva.0, oy + erva.1));
+        let antes = l.window_sim().world.biomass_at(erva.0, erva.1);
+        assert_eq!(l.gather(), Gather::Got { item: Item::Leaves, amount: 1, broke: None });
+        assert_eq!(l.inventory().count(Item::Leaves), 1);
+        let depois = l.window_sim().world.biomass_at(erva.0, erva.1);
+        assert!(depois < antes - p.leaf_biomass + 0.5, "{antes} -> {depois}");
+    }
+
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a
     /// janela se desloca, e há as mesmas em cada região.
     #[test]
@@ -839,6 +1036,8 @@ mod tests {
         let config = Config {
             seed: 3,
             resources: ResourceParams { carry: 1, ..ResourceParams::default() },
+            // Sem isto, a erva da célula vazia dava folhas.
+            shelter: ShelterParams { leaf_biomass: f32::INFINITY, ..ShelterParams::default() },
             ..Config::default()
         };
         let mut l = Landscape::new(config, 3, 3, (36, 36));

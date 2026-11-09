@@ -7,6 +7,7 @@ use crate::rabbit::{Rabbit, RabbitParams};
 use crate::resources::{Resource, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
+use crate::shelter::ShelterParams;
 use crate::spatial::Grid;
 use crate::world::{distance, VegetationParams, World};
 
@@ -218,6 +219,7 @@ pub struct Config {
     pub scent: ScentParams,
     pub daylight: DaylightParams,
     pub calendar: CalendarParams,
+    pub shelter: ShelterParams,
     pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
@@ -240,6 +242,7 @@ impl Default for Config {
             scent: ScentParams::default(),
             daylight: DaylightParams::default(),
             calendar: CalendarParams::default(),
+            shelter: ShelterParams::default(),
             resources: ResourceParams::default(),
             cabin: None,
         }
@@ -317,6 +320,9 @@ pub struct Simulation {
     /// Onde está o jogador, se estiver no mapa. Os coelhos e as raposas
     /// afastam-se dele. Sem jogador, a simulação é igual à de antes.
     pub player: Option<(usize, usize)>,
+    /// O abrigo do jogador e o cheiro humano que deixa por hora, se estiver
+    /// neste mapa (ver `shelter.rs`).
+    pub camp: Option<((usize, usize), f32)>,
     tick: u64,
     /// Grelhas espaciais e listas auxiliares, refeitas em cada tick e
     /// guardadas aqui só para não alocar memória de novo.
@@ -401,6 +407,7 @@ impl Simulation {
             rabbits,
             foxes,
             player: None,
+            camp: None,
             tick,
             scratch: Scratch::default(),
             grid_min_pairs: GRID_MIN_PAIRS,
@@ -506,6 +513,9 @@ impl Simulation {
         }
         if let Some((x, y)) = self.player {
             self.world.scent.deposit(Scent::Human, x, y, p.human_per_tick);
+        }
+        if let Some(((x, y), amount)) = self.camp {
+            self.world.scent.deposit(Scent::Human, x, y, amount);
         }
         self.world.scent.spread(p);
     }

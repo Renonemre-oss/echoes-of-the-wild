@@ -717,7 +717,7 @@ A abordagem exata — blocos, peças modulares ou sistema híbrido — foi adiad
 
 | Estrutura | Utilidade |
 |---|---|
-| Cabana | Abrigo inicial |
+| Cabana | Abrigo inicial (o jogador constrói-o; ver a nota abaixo) |
 | Torre de vigia | Observar o território e detetar ameaças |
 | Armazém | Guardar materiais e alimentos |
 | Oficina | Criar e melhorar ferramentas e equipamento |
@@ -726,6 +726,19 @@ A abordagem exata — blocos, peças modulares ou sistema híbrido — foi adiad
 | Cercas | Proteger plantações e animais |
 | Armadilhas | Capturar animais ou obter recursos, com regras próprias |
 | Torre defensiva | Proteger a base em situações de ameaça |
+
+> **Nota de implementação (abrigo, novembro de 2026):** o jogador começa sem abrigo e sem tenda. O objetivo dos primeiros dias é construir o seu. O abrigo faz-se em quatro etapas, no mesmo sítio (tecla B), e cada etapa acrescenta algo que a anterior não tinha. A escada segue os quatro tipos de chozo de pastor da Estremadura (Martín Galindo 2006), e o primeiro passo segue o abrigo de ramos do manual FM 21-76:
+>
+> | Etapa | Custo | Horas |
+> |---|---|---|
+> | Abrigo de ramos, encostado a uma árvore | 6 madeira | 2 |
+> | Cabana de folhas (teto e cama de folhas) | 10 folhas | 3 |
+> | Chozo com base de pedra | 8 pedra, 6 madeira | 6 |
+> | Chozo com lareira | 6 pedra | 4 |
+>
+> As folhas recolhem-se da erva onde não há árvore nem pedra, e gastam vegetação: tirar folhas tira comida aos coelhos. Os custos e os tempos são decisões de jogo, ancoradas em medidas: 5–8 varas para o abrigo de ramos, poucas horas para uma cabana leve, dias para uma de pedra.
+>
+> Por agora o abrigo ainda não protege o jogador de nada, porque o jogador ainda não tem frio nem cansaço. O que faz é cheirar a gente. Deixa cheiro humano por hora, menos do que o jogador nas três primeiras etapas e mais com a lareira, por causa do fumo, e os animais afastam-se. A pesquisa está no relatório "Abrigos construídos pelo jogador".
 
 ## 10.3. Construção ligada ao ambiente
 

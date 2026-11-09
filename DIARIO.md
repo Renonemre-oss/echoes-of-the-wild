@@ -33,6 +33,59 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-09 (segunda-feira, à tarde)
+
+### O jogador constrói o seu abrigo 🛖
+
+**Porquê:** perguntaste em que parte do plano estávamos. Faltava a construção de abrigo para fechar a Etapa 6. Disseste que o jogador não devia começar com um abrigo pronto, nem com uma tenda, para haver um objetivo nos primeiros dias. Por omissão o jogo já começava sem cabana: a cabana atual é uma experiência do GDD 18.6, que só aparece com `--cabin`. Faltava um abrigo que o próprio jogador construísse.
+
+**A pesquisa veio primeiro**, com a skill nova (notas em `research_notes/Abrigos construídos pelo jogador/`, relatório em `reports/Abrigos construídos pelo jogador.md`):
+- **Abrigos de emergência:** o manual FM 21-76 pede 5–8 varas de cerca de 3 m para um abrigo de ramos, 1 m de folhas por cima para uma cabana de folhas e uma cama de 30 cm. Diz também que em repouso se perde até 80% do calor para o chão, mas é a única fonte que o diz.
+- **Abrigos tradicionais:** chozos da Estremadura, Star Carr e Howick, as chise dos Ainu, as cabanas de folhas dos Baka e dos Mbuti, o wigwam dos Ojibwe e outros. Por todo o mundo, a passagem do provisório ao permanente faz-se no mesmo sítio e com a mesma planta, trocando de material. Os quatro tipos de chozo já são uma escada de melhorias.
+- **Outros jogos:** cada melhoria tem de trazer algo novo. No UnReal World os jogadores acham que a cabana não compensa o esforço.
+
+**Decidiste fazer só o abrigo, sem efeito no jogador por agora.** O jogador ainda não tem frio nem cansaço, por isso o abrigo não o protege de nada.
+
+**O que mudou:**
+- **Um item novo, as folhas.** Recolhem-se com E na erva, onde não há árvore nem pedra ao lado. Cada folha gasta 2 de vegetação, por isso tirar folhas tira comida aos coelhos.
+- **A tecla B constrói ou melhora o abrigo**, em quatro etapas no mesmo sítio:
+
+  | Etapa | Custo | Horas |
+  |---|---|---|
+  | Abrigo de ramos | 6 madeira, ao lado de uma árvore | 2 |
+  | Cabana de folhas | 10 folhas | 3 |
+  | Chozo com base de pedra | 8 pedra, 6 madeira | 6 |
+  | Chozo com lareira | 6 pedra | 4 |
+
+  A primeira etapa não se faz em cima de uma árvore, de uma pedra ou de uma toca. Só há um abrigo, e as melhorias fazem-se nele. Se faltar material, não gasta nada.
+- **O abrigo cheira a gente:** deixa cheiro humano por hora, 1 / 1,5 / 2 / 6 por etapa (o jogador deixa 5). Com a lareira cheira mais do que o jogador, por causa do fumo. Só cheira quando está dentro da janela simulada.
+- **No ecrã:** o abrigo aparece no mapa, cada vez maior, e com lareira fica avermelhado. O painel mostra o abrigo e o que falta para a etapa seguinte.
+
+**Testes:** passam 114 no `eotw_sim` e 15 no jogo. Há 7 testes novos:
+- o primeiro abrigo precisa de uma árvore e de madeira;
+- as etapas constroem-se no mesmo sítio;
+- o abrigo cheira a gente;
+- recolher folhas gasta erva;
+- as etapas seguem pela ordem certa;
+- a lareira cheira mais do que o jogador;
+- o painel explica a construção.
+
+Dois testes mudaram de propósito:
+- `sem_espaco_ou_sem_recurso_nao_gasta_tempo`: agora uma célula vazia dá folhas, por isso o teste desliga as folhas para continuar a testar o mesmo;
+- `o_painel_explica_a_recolha`: a frase passou a falar também da erva.
+
+O clippy está limpo. Sem abrigo, a simulação dá exatamente o mesmo resultado que antes (`eotw_cli --seed 7 --days 200`, byte a byte).
+
+**O que ainda falta:**
+- uma razão para o jogador se abrigar, como o descanso ou o frio;
+- a chuva e o vento;
+- guardar coisas no abrigo;
+- a lareira assustar os animais de forma mais clara do que pelo cheiro.
+
+Os custos e os tempos são decisões de jogo. Não encontrei tempos de construção medidos para cada tipo de abrigo.
+
+**A seguir:** testares no jogo. Recolhe 6 de madeira, põe-te ao lado de uma árvore e carrega em B.
+
 ## 2026-11-09 (segunda-feira)
 
 ### O jogo passa a ter calendário 📅
