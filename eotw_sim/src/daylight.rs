@@ -44,6 +44,17 @@ impl DaylightParams {
     }
 }
 
+impl DaylightParams {
+    /// O meio do dia: de três horas depois do nascer do sol (a meio do
+    /// amanhecer) até três horas antes do pôr (a meio do anoitecer). É quando
+    /// os coelhos bravos digerem na lura (cecotrofia, cerca de 08:00–17:00).
+    pub fn midday(&self, hour: u64) -> bool {
+        let h = hour % TICKS_PER_DAY;
+        let half = self.twilight / 2;
+        h >= self.dawn + half + 3 && h < self.dusk + half - 3
+    }
+}
+
 /// A distância a que um animal vê com esta luz: `night` às escuras, `day`
 /// com luz plena, e entre as duas no amanhecer e no anoitecer.
 pub fn vision(day: usize, night: usize, light: f32) -> usize {
@@ -70,6 +81,13 @@ mod tests {
         assert_eq!(luz[23], 0.0);
         // Uma hora depois de 23 é meia-noite outra vez.
         assert_eq!(d.light(24), luz[0]);
+    }
+
+    #[test]
+    fn o_meio_dia_vai_das_9_as_17() {
+        let d = DaylightParams::default();
+        let horas: Vec<u64> = (0..24).filter(|&h| d.midday(h)).collect();
+        assert_eq!(horas, (9..17).collect::<Vec<_>>());
     }
 
     #[test]

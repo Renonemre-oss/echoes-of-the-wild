@@ -33,6 +33,124 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-09 (segunda-feira)
+
+### O jogo passa a ter calendário 📅
+
+**Porquê:** o relatório "Vida social mundial coelho e raposa" propõe 24 regras para dar vida social aos coelhos e às raposas, e quase todas dependem da altura do ano: quando se cria, quando os jovens saem de casa, quando os grupos se fecham. Escolheste começar pelas estações. Antes de escrever o código pesquisei o calendário dos dois animais em várias partes do mundo (notas em `research_notes/Calendário do coelho e da raposa/`). Foi a primeira vez que usei a skill nova de pesquisa global.
+
+**Um ano de 36 dias.** Cada mês dura 3 dias de jogo. Este número não foi escolhido ao acaso, sai das idades que o jogo já tinha:
+- o coelho amadurece aos 10 dias de jogo e o coelho-bravo do sul de Espanha cria pela primeira vez aos 3–4 meses;
+- a raposa amadurece aos 30 dias e a raposa real acasala aos 10 meses (Newsome & Coman 1989).
+
+As duas contas dão cerca de 3 dias por mês. A simulação começa em julho: com os 60 dias de aquecimento (20 meses), chegas em março, no pico das crias dos coelhos.
+
+**O que o calendário sabe de cada mês:**
+- a estação (no hemisfério sul fica trocada);
+- se os coelhos criam. Na Ibéria criam de novembro a junho, com pico em março e abril, e param no verão seco (Gonçalves 2002 em Pancas; Delibes & Calderón e Soriguer no sudoeste);
+- a fase da raposa: acasalamento em janeiro, gestação, crias na toca em março e abril, crias fora da toca em maio e junho, família no verão e dispersão de outubro a dezembro. Os partos de Doñana são do fim de fevereiro a março;
+- a probabilidade de uma raposa jovem dispersar nesse mês. A tabela é a de Bristol (Smith & Harris 1991): zero de abril a setembro e pico em dezembro. Bate certo com Doñana, onde a dispersão vai de outubro a janeiro (Travaini et al. 1993).
+
+Há quatro climas: mediterrânico ibérico (o padrão), temperado oceânico (Inglaterra e Países Baixos, onde os coelhos criam de fevereiro a setembro), temperado continental (Bayreuth e Suécia, de março a setembro) e temperado do sul (Nova Zelândia e Austrália, com tudo deslocado seis meses).
+
+**No ecrã** aparece uma linha nova, por exemplo "1 de março, primavera, ano 2" e "Coelhos: pico das crias; raposas: crias na toca".
+
+**O que não muda:** os animais ainda não usam o calendário. O resultado da simulação é exatamente igual ao de antes (`eotw_cli --seed 7 --days 200` deu a mesma saída, byte a byte). O calendário só prepara as regras que vêm a seguir.
+
+**Testes:** passam os 108 do `eotw_sim`, 5 deles novos:
+- o ano tem 36 dias e começa em julho;
+- o jogador chega em março;
+- as estações trocam no sul;
+- na Ibéria os coelhos param no verão;
+- a raposa só dispersa de outubro a março.
+
+O clippy está limpo.
+
+**Uma coisa que a pesquisa mostrou:** as probabilidades mensais de Bristol fazem sair cerca de metade dos machos jovens, mas a proporção medida em Bristol é 44 ± 26%. Estão dentro da margem, mas são duas medições diferentes, e o teste aceita de 45% a 55%.
+
+**O que ainda falta:**
+- o comprimento do dia ainda não muda com a estação;
+- a reprodução dos coelhos e das raposas ainda não segue a época;
+- não há anos secos nem húmidos (num ano seco os coelhos só criam de janeiro a março);
+- não há números ibéricos de dispersão da raposa, por isso usa-se a tabela de Bristol;
+- faltam fontes primárias do sul de França, da Irlanda, do centro de Espanha e do Chile.
+
+**A seguir:** testares no jogo e ver se a data no ecrã faz sentido. Depois, pôr a reprodução a seguir a época.
+
+## 2026-11-05 (quinta-feira)
+
+### O coelho e a raposa com números da natureza 🐇🦊
+
+**Porquê:** a terceira ronda de pesquisa ("Mecânicas quantitativas dos animais", em `reports/`) comparou o jogo com números medidos e encontrou três desvios que se compensavam uns aos outros:
+- o coelho descansava de noite, mas o coelho bravo digere na lura de dia e come ao crepúsculo e de noite;
+- a raposa acertava 50% das tentativas, contra cerca de 23% medidos sobre mamíferos;
+- um coelho dava à raposa comida para 5 dias, contra 1 a 1,5 na natureza.
+
+Corrigimos os três juntos e aceitaste que a população passasse a ter ciclos mais fortes.
+
+**O coelho descansa ao meio-dia.** A regra é a mesma, mas passou da noite para o meio-dia (das 9h às 17h, `DaylightParams::midday`): um coelho com energia entre 40 e 60 vai para a toca e recupera lá. Ao meio-dia estão na toca 27% dos coelhos, contra 4% à meia-noite. Antes era ao contrário.
+
+**Pôr quase todos na toca não deu.** Na natureza, ao meio-dia estão na toca cerca de 90%. Experimentei pôr na toca todos os coelhos com 30 ou mais de energia, sem teto: ao meio-dia ficavam lá 84%. Mas assim voltavam todos às tocas todos os dias, comiam só à volta delas, rapavam lá a erva, e de noite quase não ganhavam energia. Quase deixaram de ter crias e a população caiu para menos de 10. É a mesma armadilha do pastoreio junto às tocas que já tínhamos visto.
+
+**O coelho ouve o jogador.** Com os coelhos ativos de noite, só viam o jogador a 2 células e o teste `o_jogador_afasta_os_animais` falhava. Uma pessoa a andar ouve-se, por isso o coelho ouve o jogador a 3 células, de dia e de noite (`player_hearing`). A raposa anda calada e continua a só se ver. Na natureza, a lebre foge de uma pessoa a cerca de 70 m (7 células).
+
+**A raposa ficou com os números medidos:**
+- acerta 25% das tentativas (`catch_chance`, antes 0,5);
+- gasta 2,4 por hora ativa e 0,4 a descansar ou a comer restos parada (antes 0,35 sempre). Um coelho (45 de energia) chega-lhe para cerca de um dia e meio;
+- de dia só caça abaixo de 20 de energia (antes 50), e de noite abaixo de 70 (antes 60);
+- apanha roedores: com fome, tenta um salto na erva onde está. Acerta 45% na erva baixa e cerca de um terço disso na erva alta, e cada roedor dá 4. Os roedores não são animais da simulação. Dão à raposa a dieta mista que ela tem na natureza.
+
+**Cada mudança da raposa partiu outra coisa:**
+
+| Tentativa | O que aconteceu |
+|---|---|
+| Só 12 de energia por coelho | As raposas nunca chegavam aos 75 para ter crias: ficavam em 2 por região |
+| Gasto de 1,4 sempre | Equilíbrio bom, mas 47% das caçadas eram de dia |
+| Caçar de dia só abaixo de 20, sem gasto menor a descansar | As raposas passavam o dia com fome e ficavam em 1,4 a 2,4 |
+| Gasto menor a descansar | Funcionou, mas comer restos na cabana passou a custar mais do que dava, e os testes da cabana falharam |
+| Comer restos parada gasta como descansar | Os restos voltaram ao valor antigo (0,5) e a cabana voltou a funcionar |
+| `hunt_below` 60 ou 65 | Com uma raposa só no início, às vezes morria e era precisa migração (`margens_de_equilibrio`) |
+
+**O resultado** (10 seeds, 900 dias, mapas de 24x24):
+
+| | Antes | Agora |
+|---|---|---|
+| Coelhos | 276 | 229 |
+| Raposas | 8,0 | 10,5 |
+| Coelhos caçados por raposa por dia | 0,2 | 0,3 |
+| Oscilação dos coelhos | 7,9% | 20% |
+| Caçadas de dia | menos de 5% | 2% |
+| Na toca à meia-noite / ao meio-dia | 26% / 5% | 4% / 27% |
+
+A oscilação é a que aceitaste: com a raposa a comer mais coelhos por dia, coelhos e raposas sobem e descem em ciclos, como na natureza. Nenhuma seed se extinguiu.
+
+**A agregada.** A raposa come agora 0,30 coelhos por dia na completa (antes 0,205), e foi esse o valor que entrou em `prey_per_fox`. As distribuições da conversão para animais (energia de coelhos e raposas, raposas saciadas e à espera, coelhos na toca à meia-noite) foram medidas outra vez da mesma maneira (10 seeds, 5 momentos). As tabelas das crias, da reserva e da fome não mudaram: com elas a agregada já fica dentro dos limites.
+
+| | Completa | Agregada |
+|---|---|---|
+| Coelhos (24x24, dias 500 a 900) | 235 | 246 (+4,4%) |
+| Raposas | 10,2 | 10,0 (−2%) |
+| Vegetação | 5,29 | 5,10 (−3,5%) |
+| Coelhos por região, 48x48 | 940 | 979 (+4,1%) |
+
+**Nenhum limite de teste foi alargado.** O choque de 15% e a cabana de 1,5 ficaram como estavam. Dois testes mudaram de propósito:
+- `de_noite_ha_mais_coelhos_na_toca` passou a `ao_meio_dia_ha_mais_coelhos_na_toca`, com a comparação ao contrário;
+- `a_paisagem_fica_em_equilibrio` tinha um intervalo à volta do equilíbrio antigo (240 a 330 coelhos e 3 a 12 raposas por região). O equilíbrio desceu de propósito, por isso o intervalo desceu com ele (190 a 280 e 6 a 15), com a mesma largura. A janela dava 239 coelhos e 11,2 raposas, e as agregadas 241 e 10,2.
+
+**Testes novos:**
+- `com_fome_apanha_roedores_mais_na_erva_baixa`;
+- `de_noite_ouve_o_jogador_mas_nao_a_raposa`;
+- `o_meio_dia_vai_das_9_as_17`.
+
+**Ainda não feito:**
+- a curva do coelho hora a hora do relatório (9 h à superfície, dois picos ao crepúsculo e uma noite moderada). O coelho continua ativo toda a noite;
+- o cheiro que dura menos com calor e o vento;
+- a gazapera e as doenças do coelho.
+
+**O que se aprendeu:** os três desvios estavam mesmo a compensar-se. Corrigir um só desequilibrava tudo, e cada correção da raposa mostrou um pressuposto escondido: que descansar custa o mesmo que caçar, ou que comer restos é uma atividade.
+
+**Próximo passo:** testares no jogo.
+
 ## 2026-11-03 (terça-feira)
 
 **O que foi feito**

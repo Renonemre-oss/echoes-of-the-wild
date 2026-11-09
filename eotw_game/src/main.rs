@@ -22,7 +22,7 @@ use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Gather, Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Tool, TICKS_PER_DAY};
+use eotw_sim::{Breeding, CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Tool, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -251,6 +251,26 @@ struct Tile(usize);
 struct AnimalSprite;
 
 /// O nome da parte do dia, pela luz e pela hora.
+/// A data e o que os animais estão a fazer nesta altura do ano.
+fn date_line(sim: &Simulation) -> String {
+    let calendar = &sim.config().calendar;
+    let d = sim.date();
+    let coelhos = match calendar.rabbit_breeding(d.month) {
+        Breeding::Nao => "não criam",
+        Breeding::Pouca => "criam pouco",
+        Breeding::Sim => "criam",
+        Breeding::Pico => "pico das crias",
+    };
+    format!(
+        "{} de {}, {}, ano {}\nCoelhos: {coelhos}; raposas: {}",
+        d.day,
+        d.month_name(),
+        calendar.season(d.month).name(),
+        d.year,
+        calendar.fox_phase(d.month).name(),
+    )
+}
+
 fn period(light: f32, hour: u64) -> &'static str {
     match light {
         l if l >= 1.0 => "dia",
@@ -550,7 +570,7 @@ fn mark(cell: (i64, i64), color: Color, size: f32, z: f32) -> Mark {
 
 /// Os coelhos que se veem, com o seu índice em `sim.rabbits`. Um coelho
 /// dentro de uma toca está escondido, como para as raposas e para o
-/// jogador na simulação: de noite, quando muitos descansam, veem-se menos.
+/// jogador na simulação: ao meio-dia, quando muitos descansam, veem-se menos.
 fn visible_rabbits(sim: &Simulation) -> impl Iterator<Item = (usize, &Rabbit)> {
     sim.rabbits.iter().enumerate().filter(|(_, r)| !sim.world.is_burrow(r.x, r.y))
 }
@@ -659,7 +679,7 @@ fn draw_panel(
     let log: String = log.map(|l| format!("\n{l}")).collect();
     let new = format!(
         "Echoes of the Wild\n\n\
-         Dia {}, {:02}h, {}\n{state}, {} horas por segundo\n\
+         Dia {}, {:02}h, {}\n{}\n{state}, {} horas por segundo\n\
          {:.0} frames por segundo, simulação até {:.1} ms\n\n\
          Região {}, {} (de {} x {})\n\
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
@@ -673,6 +693,7 @@ fn draw_panel(
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
         period(sim.light(), sim.tick() % TICKS_PER_DAY),
+        date_line(sim),
         SPEEDS[clock.speed],
         perf.fps,
         perf.sim_peak,

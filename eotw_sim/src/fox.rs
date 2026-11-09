@@ -31,16 +31,31 @@ pub struct FoxParams {
     pub full_energy: f32,
     /// Acima deste valor a raposa não caça, mesmo que veja um coelho.
     /// Foi o parâmetro que mais pesou no equilíbrio. Na varredura
-    /// (`eotw_cli --sweep`, 20 a 40 seeds, até 1000 dias) é estável entre 50 e 70
-    /// e colapsa a partir de 75; 60 fica a meio, longe das duas beiras
-    /// (ver DIARIO.md e o teste `margens_de_equilibrio`).
+    /// (`eotw_cli --sweep`, 20 a 40 seeds, até 1000 dias) era estável entre 50
+    /// e 70 e colapsava a partir de 75, e ficou em 60. Com o gasto e o êxito
+    /// reais da raposa, 50 já precisava de migração e 65 também, quando
+    /// começa com uma raposa só; 70 aguenta 60 e 80 (ver DIARIO.md e o teste
+    /// `margens_de_equilibrio`).
     pub hunt_below: f32,
     /// De dia a raposa descansa e só caça com mais fome: abaixo deste valor
     /// em vez de `hunt_below`. Assim caça sobretudo de noite e ao
     /// anoitecer, como uma raposa a sério (GDD 9.2: predadores noturnos).
+    /// Com o gasto real, 50 dava 47% das caçadas de dia; com 20, 4%.
     pub day_hunt_below: f32,
-    /// Gasto de energia por tick, mesmo parada.
+    /// Gasto de energia por tick quando está ativa (a caçar, a fugir, a
+    /// seguir o nariz). Com cerca de 10 horas ativas e 14 a descansar
+    /// (`rest_metabolism`), gasta perto de 30 por dia, e um coelho
+    /// (`energy_per_rabbit`) chega para um dia e meio, como na natureza: um
+    /// coelho de 0,8 a 1 kg dá a uma raposa 1 a 1,5 dias de comida (relatório
+    /// "Mecânicas quantitativas dos animais"). Antes gastava 0,35 sempre, e
+    /// um coelho chegava para 5 dias.
     pub metabolism: f32,
+    /// O gasto por tick quando descansa (saciada ou sem fome) ou come restos
+    /// parada, em vez de `metabolism`. Com o gasto de uma raposa ativa, comer
+    /// restos custava mais do que eles davam e a raposa ficava presa na
+    /// cabana a perder energia. Com o mesmo gasto parada e ativa, as raposas passavam o
+    /// dia com fome e 47% das caçadas eram de dia.
+    pub rest_metabolism: f32,
     /// Gasto extra de energia por cada célula que anda (ou por cada ataque falhado).
     pub move_cost: f32,
     /// Até quantas células de distância vê um coelho.
@@ -71,6 +86,8 @@ pub struct FoxParams {
     /// Quantas células anda por tick quando está a perseguir uma presa.
     pub chase_speed: usize,
     /// Probabilidade de apanhar um coelho ao lado, numa célula sem vegetação.
+    /// Medido: a raposa acerta cerca de 23% das tentativas sobre mamíferos.
+    /// Com 0,5 acertava o dobro.
     pub catch_chance: f32,
     /// Quanto a vegetação cheia reduz a probabilidade de caça (0 = nada, 1 = tudo).
     pub refuge: f32,
@@ -78,6 +95,17 @@ pub struct FoxParams {
     /// mais alta). Um coelho abrigado tem o maior dos dois.
     pub tree_refuge: f32,
     pub energy_per_rabbit: f32,
+    /// Probabilidade, por hora com fome, de apanhar um roedor na erva onde
+    /// está (o salto da raposa, GDD 8.1). Na erva alta acerta menos: a
+    /// chance é multiplicada por `1 - mouse_cover * vegetação` (medido:
+    /// cerca de 60% dos saltos acertam, um terço disso na erva alta). Os
+    /// roedores não são animais da simulação: dão à raposa a dieta mista que
+    /// ela tem na natureza. Sem eles, com o êxito e o metabolismo reais, as
+    /// raposas ficavam em 2 por região. Com estes valores, cada raposa come
+    /// cerca de 0,3 coelhos por dia e o resto do que gasta vem dos roedores.
+    pub mouse_chance: f32,
+    pub mouse_cover: f32,
+    pub energy_per_mouse: f32,
     /// Quantos restos de comida come por tick, e quanta energia dá cada unidade.
     pub scrap_bite: f32,
     /// Este valor decide o que os restos são para a raposa. Se forem nutritivos,
@@ -116,9 +144,10 @@ impl Default for FoxParams {
             energy_max: 100.0,
             energy_start: 70.0,
             full_energy: 95.0,
-            hunt_below: 60.0,
-            day_hunt_below: 50.0,
-            metabolism: 0.35,
+            hunt_below: 70.0,
+            day_hunt_below: 20.0,
+            metabolism: 2.4,
+            rest_metabolism: 0.4,
             move_cost: 0.15,
             vision: 5,
             night_vision: 4,
@@ -128,10 +157,13 @@ impl Default for FoxParams {
             prey_smell_min: 0.0,
             scavenge_smell_min: 8.0,
             chase_speed: 2,
-            catch_chance: 0.5,
+            catch_chance: 0.25,
             refuge: 0.7,
             tree_refuge: 0.6,
             energy_per_rabbit: 45.0,
+            mouse_chance: 0.45,
+            mouse_cover: 0.67,
+            energy_per_mouse: 4.0,
             scrap_bite: 2.0,
             energy_per_scrap: 0.5,
             satiety_ticks: 24,
@@ -234,7 +266,9 @@ impl Fox {
             self.energy -= p.move_cost;
         } else if self.energy < p.full_energy && world.scraps_at(self.x, self.y) > 0.0 {
             // Restos de comida mesmo aqui: come até estar cheia.
+            // Comer parada gasta como descansar.
             let eaten = world.take_scraps(self.x, self.y, p.scrap_bite);
+            self.energy += p.metabolism - p.rest_metabolism;
             self.energy = (self.energy + eaten * p.energy_per_scrap).min(p.energy_max);
         } else if let Some(next) = hungry
             .then(|| sniff(world, rng, Scent::Food, (self.x, self.y), p.scavenge_smell_min))
@@ -245,6 +279,8 @@ impl Fox {
             (self.x, self.y) = next;
             self.energy -= p.move_cost;
             result.followed_food = true;
+        } else if hungry && self.mouse(world, rng, p) {
+            // Apanhou um roedor na erva onde está: come-o ali.
         } else if hungry {
             match nearest_rabbit(rabbits, nearby, world, self.x, self.y, p.vision) {
                 Some(i) if distance((self.x, self.y), (rabbits[i].x, rabbits[i].y)) <= 1 => {
@@ -285,8 +321,10 @@ impl Fox {
                     self.energy -= p.move_cost;
                 }
             }
+        } else {
+            // Saciada ou sem fome: descansa, e a descansar gasta menos.
+            self.energy += p.metabolism - p.rest_metabolism;
         }
-        // Saciada ou sem fome: descansa.
 
         if self.age >= p.maturity_ticks
             && self.cooldown == 0
@@ -305,6 +343,18 @@ impl Fox {
     fn rivals_allowed(&self, world: &World, p: &FoxParams) -> usize {
         let scraps = world.scraps_within((self.x, self.y), p.territory_radius);
         (scraps * p.energy_per_scrap / p.scrap_energy_per_extra_fox) as usize
+    }
+
+    /// Tenta apanhar um roedor na erva onde está. Se acertar, come-o ali.
+    fn mouse(&mut self, world: &World, rng: &mut Rng, p: &FoxParams) -> bool {
+        let grass = world.biomass_at(self.x, self.y) / world.capacity();
+        let chance = p.mouse_chance * (1.0 - p.mouse_cover * grass);
+        if rng.next_f32() < chance {
+            self.energy = (self.energy + p.energy_per_mouse).min(p.energy_max);
+            true
+        } else {
+            false
+        }
     }
 
     /// Tenta apanhar um coelho ao lado. Quanto mais vegetação houver na célula
@@ -387,8 +437,40 @@ mod tests {
         FoxParams {
             catch_chance: 1.0,
             refuge: 0.0,
+            mouse_chance: 0.0,
             ..FoxParams::default()
         }
+    }
+
+    /// Sem roedores, para os testes do que a raposa faz quando não caça.
+    fn sem_roedores() -> FoxParams {
+        FoxParams {
+            mouse_chance: 0.0,
+            ..FoxParams::default()
+        }
+    }
+
+    #[test]
+    fn com_fome_apanha_roedores_mais_na_erva_baixa() {
+        let p = FoxParams { mouse_chance: 0.6, ..FoxParams::default() };
+        let contar = |erva: f32| {
+            let mut apanhou = 0;
+            for seed in 0..400 {
+                let mut world = mundo();
+                world.set_biomass(5, 5, erva);
+                let mut rng = Rng::new(seed);
+                let mut fox = Fox::newborn(5, 5, 40.0);
+                fox.act(&mut [], &mut world, &mut rng, &p, 0, None);
+                if fox.energy > 40.0 - p.metabolism {
+                    apanhou += 1;
+                }
+            }
+            apanhou
+        };
+        let (baixa, alta) = (contar(0.0), contar(mundo().capacity()));
+        // 60% e 20% de 400.
+        assert!((200..280).contains(&baixa), "erva baixa: {baixa}");
+        assert!((50..110).contains(&alta), "erva alta: {alta}");
     }
 
     #[test]
@@ -512,7 +594,7 @@ mod tests {
         }
         for _ in 0..20 {
             let mut fox = Fox::newborn(5, 5, 40.0);
-            fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
+            fox.act(&mut [], &mut world, &mut rng, &sem_roedores(), 0, None);
             assert_eq!((fox.x, fox.y), (6, 5));
         }
     }
@@ -552,7 +634,7 @@ mod tests {
         world.take(0, 1, 1000.0);
         world.take(6, 7, 1000.0);
         world.add_resource(Resource { x: 7, y: 7, kind: ResourceKind::Tree, amount: 4.0 });
-        let p = FoxParams::default();
+        let p = sem_roedores();
         let mut rng = Rng::new(9);
         let (mut expostos, mut abrigados) = (0, 0);
         for _ in 0..1000 {
@@ -565,7 +647,7 @@ mod tests {
                 abrigados += 1;
             }
         }
-        // Sem erva, a 50%; junto à árvore, a 50% × (1 − 0,7 × 0,6) = 29%.
+        // Sem erva, a 25%; junto à árvore, a 25% × (1 − 0,7 × 0,6) = 14,5%.
         assert!(abrigados * 3 < expostos * 2, "abrigados {abrigados}, expostos {expostos}");
     }
 
@@ -573,7 +655,7 @@ mod tests {
     fn vegetacao_densa_protege_os_coelhos() {
         let mut world = mundo();
         world.take(0, 1, 1000.0); // célula vazia: coelho exposto
-        let p = FoxParams::default();
+        let p = sem_roedores();
         let mut rng = Rng::new(9);
         let mut apanhados_expostos = 0;
         let mut apanhados_escondidos = 0;

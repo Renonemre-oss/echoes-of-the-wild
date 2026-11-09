@@ -1,0 +1,4 @@
+schema_version: "1.1"
+name: adiciona-texugo
+expected_outcome: |
+  A research-first answer on the European badger (and relevant regional variation worldwide) with sourced numbers, followed by concrete design rules tied to the existing coelho/raposa simulation, with uncertainties listed, before any code.

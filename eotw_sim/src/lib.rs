@@ -9,6 +9,7 @@
 //! - sem aleatoriedade global: tudo vem do `Rng` com seed;
 //! - a mesma seed dá sempre o mesmo resultado.
 
+pub mod calendar;
 pub mod daylight;
 pub mod fox;
 pub mod landscape;
@@ -23,6 +24,7 @@ pub mod sim;
 pub mod sweep;
 pub mod world;
 
+pub use calendar::{Breeding, CalendarParams, Climate, Date, FoxPhase, Season};
 pub use daylight::DaylightParams;
 pub use fox::{Fox, FoxParams};
 pub use rabbit::{Rabbit, RabbitParams};

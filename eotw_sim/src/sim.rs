@@ -1,5 +1,6 @@
 //! A simulação: junta o mundo, os coelhos e as raposas e avança no tempo.
 
+use crate::calendar::{CalendarParams, Date};
 use crate::daylight::{self, DaylightParams};
 use crate::fox::{Fox, FoxParams};
 use crate::rabbit::{Rabbit, RabbitParams};
@@ -216,6 +217,7 @@ pub struct Config {
     pub migration: MigrationParams,
     pub scent: ScentParams,
     pub daylight: DaylightParams,
+    pub calendar: CalendarParams,
     pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
@@ -237,6 +239,7 @@ impl Default for Config {
             migration: MigrationParams::default(),
             scent: ScentParams::default(),
             daylight: DaylightParams::default(),
+            calendar: CalendarParams::default(),
             resources: ResourceParams::default(),
             cabin: None,
         }
@@ -525,6 +528,11 @@ impl Simulation {
         self.tick
     }
 
+    /// A data de hoje no calendário (ver `CalendarParams`).
+    pub fn date(&self) -> Date {
+        self.config.calendar.date(self.tick)
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -547,8 +555,8 @@ impl Simulation {
         fox_params.hunt_below += (fox_params.day_hunt_below - fox_params.hunt_below) * light;
         let mut rabbit_params = self.config.rabbit.clone();
         rabbit_params.vision = daylight::vision(rabbit_params.vision, rabbit_params.night_vision, light);
-        if light < 0.5 {
-            rabbit_params.rest_above = rabbit_params.night_rest_above;
+        if self.config.daylight.midday(self.tick % TICKS_PER_DAY) {
+            rabbit_params.rest_above = rabbit_params.midday_rest_above;
         }
 
         // Primeiro as raposas: caçam e marcam os coelhos apanhados como `eaten`.
@@ -646,7 +654,7 @@ impl Simulation {
         // Depois os coelhos, pela ordem em que estão na lista (determinístico).
         // Veem onde as raposas estão agora e fogem se alguma estiver perto.
         // Cada coelho só recebe as raposas perto dele (da grelha, pela ordem da
-        // lista) e o jogador, que também conta como ameaça.
+        // lista); o jogador vai à parte, porque o coelho também o ouve.
         fox_positions.clear();
         fox_positions.extend(self.foxes.iter().map(|f| (f.x, f.y)));
         let use_fox_grid = self.foxes.len() * self.rabbits.len() >= self.grid_min_pairs;
@@ -655,7 +663,7 @@ impl Simulation {
         } else {
             // Poucas raposas: todos os coelhos recebem a lista inteira.
             threats.clear();
-            threats.extend(fox_positions.iter().copied().chain(self.player));
+            threats.extend(fox_positions.iter().copied());
         }
         let vision = rabbit_params.vision;
         let mut newborns = Vec::new();
@@ -669,10 +677,9 @@ impl Simulation {
                 fox_grid.near((rabbit.x, rabbit.y), vision, nearby);
                 threats.clear();
                 threats.extend(nearby.iter().map(|&j| fox_positions[j]));
-                threats.extend(self.player);
             }
             if let Some(baby) =
-                rabbit.act(&mut self.world, &mut self.rng, &rabbit_params, threats)
+                rabbit.act(&mut self.world, &mut self.rng, &rabbit_params, threats, self.player)
             {
                 newborns.push(baby);
             }
@@ -1087,11 +1094,12 @@ mod tests {
         assert!(dia * 20 < total, "{dia} de {total} caçadas foram de dia");
     }
 
-    /// GDD 7.1: de noite, os coelhos com energia entre `night_rest_above` e
-    /// `rest_cap` descansam na toca. Há mais do dobro dos coelhos escondidos
-    /// à meia-noite do que ao meio-dia (medido: 24% contra 9%).
+    /// GDD 7.1: ao meio-dia, os coelhos com energia entre `midday_rest_above`
+    /// e `rest_cap` descansam na toca, como os coelhos bravos, que digerem lá
+    /// de dia e comem ao crepúsculo e de noite. Há mais do dobro dos coelhos
+    /// escondidos ao meio-dia do que à meia-noite (medido: 25% contra 4%).
     #[test]
-    fn de_noite_ha_mais_coelhos_na_toca() {
+    fn ao_meio_dia_ha_mais_coelhos_na_toca() {
         let (mut noite, mut dia) = (0.0, 0.0);
         let escondidos = |sim: &Simulation| {
             let n = sim.rabbits.iter().filter(|r| sim.world.is_burrow(r.x, r.y)).count();
@@ -1111,7 +1119,7 @@ mod tests {
                 }
             }
         }
-        assert!(noite > 2.0 * dia, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
+        assert!(dia > 2.0 * noite, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
     }
 
     /// GDD 7.1 e 7.7: as árvores são abrigo. Onde se cortam fica uma clareira:

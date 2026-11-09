@@ -75,7 +75,9 @@ pub struct AggregateParams {
     pub reserve_rate: f32,
     /// Mortes por fome por coelho por dia, por vegetação média.
     pub hunger: Vec<(f32, f32)>,
-    /// Coelhos comidos por raposa por dia.
+    /// Coelhos comidos por raposa por dia. Era 0,205; com o gasto e o êxito
+    /// reais da raposa, e os roedores, mediu-se 0,30 na completa (10 seeds,
+    /// 900 dias).
     pub prey_per_fox: f32,
     /// Crias por raposa por dia, pelo número de raposas em cada 24x24 de
     /// região. Medido em cada região de 24x24 de mapas de 72x72, já em
@@ -98,7 +100,9 @@ pub struct AggregateParams {
     /// para ter a energia média da região (`AggregateRegion::rabbit_energy`).
     pub rabbit_energy: Vec<(f32, f32)>,
     pub fox_energy: Vec<(f32, f32)>,
-    /// Fração dos coelhos que está dentro de uma toca.
+    /// Fração dos coelhos que está dentro de uma toca. Medida à meia-noite,
+    /// como as outras: com o descanso ao meio-dia, a essa hora há poucos
+    /// (5%; era 24% com o descanso de noite).
     pub rabbits_in_burrows: f32,
     /// Fração dos coelhos e das raposas que acabou de ter uma cria e ainda
     /// espera para a próxima (`repro_cooldown`).
@@ -163,7 +167,7 @@ impl Default for AggregateParams {
                 (6.430, 0.0001),
                 (6.930, 0.0000),
             ],
-            prey_per_fox: 0.205,
+            prey_per_fox: 0.30,
             fox_births: vec![
                 // Sozinha: sem rivais, tem uma cria logo que pode (uma a cada
                 // `repro_cooldown`, 20 dias). Com companhia, a taxa medida.
@@ -196,26 +200,26 @@ impl Default for AggregateParams {
             ],
             rabbit_energy: vec![
                 (0.0, 1.0),
-                (0.1, 27.5),
-                (0.25, 29.8),
-                (0.5, 36.9),
-                (0.75, 45.7),
-                (0.9, 60.5),
-                (1.0, 90.0),
+                (0.1, 23.2),
+                (0.25, 29.7),
+                (0.5, 38.0),
+                (0.75, 52.2),
+                (0.9, 61.3),
+                (1.0, 91.5),
             ],
             fox_energy: vec![
-                (0.0, 45.0),
-                (0.1, 62.2),
-                (0.25, 67.1),
-                (0.5, 77.3),
-                (0.75, 87.8),
-                (0.9, 95.1),
+                (0.0, 17.6),
+                (0.1, 56.2),
+                (0.25, 69.7),
+                (0.5, 79.8),
+                (0.75, 89.6),
+                (0.9, 92.5),
                 (1.0, 100.0),
             ],
-            rabbits_in_burrows: 0.24,
+            rabbits_in_burrows: 0.05,
             rabbits_waiting: 0.06,
-            foxes_waiting: 0.09,
-            foxes_satiated: 0.16,
+            foxes_waiting: 0.15,
+            foxes_satiated: 0.27,
             rabbits_cross: 0.023,
             foxes_cross: 0.0029,
         }

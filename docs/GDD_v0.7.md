@@ -364,6 +364,15 @@ Elementos propostos:
 
 A existência de estações completas é uma ideia para explorar, não uma funcionalidade confirmada para o primeiro protótipo.
 
+> **Nota de implementação (calendário, novembro de 2026):** o protótipo já tem um calendário (`eotw_sim/src/calendar.rs`). O ano é comprimido em 36 dias de jogo, 3 dias por mês. A escala sai das idades que o jogo já usa: o coelho amadurece aos 10 dias de jogo e o coelho-bravo do sul de Espanha cria aos 3–4 meses; a raposa amadurece aos 30 dias e a raposa real acasala aos 10 meses. A simulação começa em julho, e com 60 dias de aquecimento o jogador chega em março.
+>
+> Para cada mês, o calendário dá a estação, a época de reprodução do coelho, a fase do ano da raposa e a probabilidade mensal de uma raposa jovem dispersar. Há quatro climas: mediterrânico ibérico (o padrão), temperado oceânico, temperado continental e temperado do sul, com as estações trocadas.
+>
+> - **Coelhos (ibérico):** criam de novembro a junho, com pico em março–abril, e param no verão seco (Gonçalves 2002; Delibes & Calderón; Soriguer). Num ano seco criam só de janeiro a março.
+> - **Raposas (ibérico):** acasalam em janeiro e têm partos do fim de fevereiro a março. As crias saem da toca em maio (Doñana). A dispersão vai de outubro a março, com a tabela mensal de Bristol (Smith & Harris 1991, em Devenish-Nelson 2012), que coincide com o outubro–janeiro de Doñana (Travaini et al. 1993).
+>
+> O ecrã mostra a data e o que os animais estão a fazer. Por agora os animais ainda não usam o calendário: o resultado da simulação é igual ao de antes. As regras de reprodução por época e de dispersão (relatório "Vida social mundial coelho e raposa") vão depender dele. O comprimento do dia ainda não muda com a estação.
+
 Possíveis sistemas:
 
 - Chuva e tempestades.
@@ -665,7 +674,7 @@ O ciclo dia/noite deve ter impacto real, mas não transformar todas as noites nu
 
 A noite poderá ser tranquila ou perigosa. O perigo depende de fatores como o bioma, clima, presença do jogador, alimento disponível e atividade das espécies.
 
-**No Prototype 01 (etapa 6):** a luz vai de 1 a 0, com o amanhecer das 5h às 7h e o anoitecer das 19h às 21h (`daylight.rs`). De noite o coelho vê 2 células em vez de 3, e a raposa 4 em vez de 5. De dia a raposa descansa e só caça abaixo de 50 de energia (de noite, abaixo de 60), por isso quase todas as caçadas são ao anoitecer e de noite. Só a visão reduzida não chegava: as caçadas ficavam iguais em todas as horas. No jogo, a noite é azul-escura longe do jogador e mais clara até 6 células dele. De noite, os coelhos com energia entre 40 e 60 descansam numa toca, onde não gastam energia e recuperam 1,5 por hora. Os outros continuam ativos. Aos 60 saem para comer, porque só a comer chegam aos 80 de que precisam para ter crias: sem este teto, a energia do descanso desligava a população da comida. À meia-noite estão na toca 24% dos coelhos, contra 10% ao meio-dia. Como consequência, a população oscila mais (8,8% contra 3,9%), com períodos de escassez em algumas seeds. A região agregada passou a guardar a reserva (a fração dos coelhos com 60 ou mais de energia), que é o que prevê as crias.
+**No Prototype 01 (etapa 6):** a luz vai de 1 a 0, com o amanhecer das 5h às 7h e o anoitecer das 19h às 21h (`daylight.rs`). De noite o coelho vê 2 células em vez de 3, e a raposa 4 em vez de 5. De dia a raposa descansa e só caça abaixo de 20 de energia (de noite, abaixo de 70), por isso quase todas as caçadas (98%) são ao anoitecer e de noite. Só a visão reduzida não chegava: as caçadas ficavam iguais em todas as horas. No jogo, a noite é azul-escura longe do jogador e mais clara até 6 células dele. Ao meio-dia (das 9h às 17h), os coelhos com energia entre 40 e 60 descansam numa toca, onde não gastam energia e recuperam 1,5 por hora, como os coelhos bravos, que digerem na lura de dia e comem ao crepúsculo e de noite. Os outros continuam ativos. Aos 60 saem para comer, porque só a comer chegam aos 80 de que precisam para ter crias: sem este teto, a energia do descanso desligava a população da comida. Ao meio-dia estão na toca 27% dos coelhos, contra 4% à meia-noite. De noite o coelho vê pouco, mas ouve os passos do jogador a 3 células. A raposa tem o êxito medido na natureza (25% das tentativas) e gasta 2,4 por hora ativa e 0,4 a descansar, por isso um coelho lhe chega para um dia e meio. O resto do que come são roedores, que não são animais da simulação: um salto na erva, que acerta menos na erva alta. Com isto, a população de coelhos oscila 20% (antes 8,8%), em ciclos de predador e presa (relatório "Mecânicas quantitativas dos animais"). A região agregada passou a guardar a reserva (a fração dos coelhos com 60 ou mais de energia), que é o que prevê as crias.
 
 ## 9.3. Sistemas de sobrevivência
 

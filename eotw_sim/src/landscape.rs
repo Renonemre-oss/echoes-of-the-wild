@@ -1069,7 +1069,9 @@ mod tests {
     }
 
     /// A paisagem tem, em cada região, o mesmo equilíbrio que uma região
-    /// simulada sozinha (cerca de 280 coelhos), seja na janela ou agregada.
+    /// simulada sozinha (cerca de 230 coelhos e 10 raposas), seja na janela
+    /// ou agregada. Antes de a raposa ter o gasto e o êxito reais eram cerca
+    /// de 280 coelhos e 8 raposas, e o intervalo foi deslocado com eles.
     #[test]
     fn a_paisagem_fica_em_equilibrio() {
         let mut janela = (0.0, 0.0);
@@ -1104,8 +1106,8 @@ mod tests {
         let (rj, fj) = (janela.0 / n.0, janela.1 / n.0);
         let (ra, fa) = (agregadas.0 / n.1, agregadas.1 / n.1);
         for (onde, r, f) in [("janela", rj, fj), ("agregadas", ra, fa)] {
-            assert!((240.0..330.0).contains(&r), "{onde}: {r:.0} coelhos por região");
-            assert!((3.0..12.0).contains(&f), "{onde}: {f:.1} raposas por região");
+            assert!((190.0..280.0).contains(&r), "{onde}: {r:.0} coelhos por região");
+            assert!((6.0..15.0).contains(&f), "{onde}: {f:.1} raposas por região");
         }
     }
 
