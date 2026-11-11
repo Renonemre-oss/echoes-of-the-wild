@@ -124,7 +124,7 @@ pub enum Gather {
     /// Recolheu `amount` de `item`. Passaram `gather_hours` de jogo. Se a
     /// ferramenta usada se partiu nesta recolha, `broke` diz qual.
     Got { item: Item, amount: u32, broke: Option<Tool> },
-    /// Não há árvore nem pedra ali.
+    /// Não há árvore nem pedra ali ao lado, nem erva que chegue para folhas.
     Nothing,
     /// A árvore ou a pedra ao lado já não tem nada para dar.
     Empty(Item),
@@ -310,14 +310,19 @@ impl Landscape {
         if self.window.sim.world.biomass_at(here.0, here.1) < per_leaf {
             return Gather::Nothing;
         }
-        if self.inventory.add(Item::Leaves, p.gather_amount as u32, p.carry) == 0 {
+        // As folhas contam-se inteiras: pelo menos uma por recolha, mesmo que
+        // `gather_amount` tenha casas decimais. Só se gasta a erva das que
+        // couberam no inventário.
+        let want = (p.gather_amount as u32).max(1);
+        let added = self.inventory.add(Item::Leaves, want, p.carry);
+        if added == 0 {
             return Gather::Full;
         }
-        self.window.sim.world.take(here.0, here.1, per_leaf * p.gather_amount);
+        self.window.sim.world.take(here.0, here.1, per_leaf * added as f32);
         for _ in 0..p.gather_hours {
             self.step();
         }
-        Gather::Got { item: Item::Leaves, amount: p.gather_amount as u32, broke: None }
+        Gather::Got { item: Item::Leaves, amount: added, broke: None }
     }
 
     /// Constrói o abrigo ou a etapa seguinte dele (ver `shelter.rs`). O
@@ -336,9 +341,9 @@ impl Landscape {
                 if world.resource_at(here.0, here.1).is_some() || world.is_burrow(here.0, here.1) {
                     return Build::Blocked;
                 }
-                let tree = world.neighbors(here.0, here.1).into_iter().flatten().any(|(x, y)| {
-                    world.resource_at(x, y).is_some_and(|r| r.kind == crate::resources::ResourceKind::Tree)
-                });
+                // Um toco cortado não aguenta os ramos: tem de ser uma árvore
+                // que ainda abriga.
+                let tree = world.neighbors(here.0, here.1).into_iter().flatten().any(|(x, y)| world.is_whole_tree(x, y));
                 if !tree {
                     return Build::NeedsTree;
                 }
@@ -877,7 +882,7 @@ mod tests {
         let livre = |(x, y): (usize, usize)| w.resource_at(x, y).is_none() && !w.is_burrow(x, y);
         w.resources()
             .iter()
-            .filter(|r| r.kind == ResourceKind::Tree)
+            .filter(|r| w.is_whole_tree(r.x, r.y))
             .flat_map(|r| w.neighbors(r.x, r.y).into_iter().flatten())
             .filter(|&c| livre(c))
             .map(|(x, y)| (ox + x, oy + y))
@@ -920,6 +925,21 @@ mod tests {
         assert_eq!(l.window_sim().tick(), tick + 2, "o abrigo de ramos leva 2 horas");
         assert_eq!(l.inventory().count(Item::Wood), 0);
         assert_eq!(l.shelter().map(|s| (s.x, s.y, s.stage)), Some((lado.0, lado.1, Stage::Ramos)));
+    }
+
+    /// Encostado a um toco não dá: a árvore cortada já não abriga.
+    #[test]
+    fn o_abrigo_nao_se_encosta_a_um_toco() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let lado = ao_lado_de_arvore(&l, (36, 36));
+        ir_para(&mut l, lado);
+        let here = l.in_window(lado).unwrap();
+        let world = &mut l.window.sim.world;
+        for (x, y) in world.neighbors(here.0, here.1).into_iter().flatten() {
+            world.take_resource(x, y, f32::INFINITY);
+        }
+        dar(&mut l, Item::Wood, 6);
+        assert_eq!(l.build(), Build::NeedsTree);
     }
 
     /// As melhorias fazem-se no mesmo sítio, uma de cada vez, até à lareira.
@@ -983,6 +1003,36 @@ mod tests {
         assert_eq!(l.inventory().count(Item::Leaves), 1);
         let depois = l.window_sim().world.biomass_at(erva.0, erva.1);
         assert!(depois < antes - p.leaf_biomass + 0.5, "{antes} -> {depois}");
+    }
+
+    /// As folhas contam-se inteiras: com `gather_amount` de 0,5 ainda dá
+    /// uma, e quando só cabe parte só se gasta a erva da parte que coube.
+    #[test]
+    fn as_folhas_que_nao_cabem_nao_gastam_erva() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let p = ShelterParams::default();
+        let (ox, oy) = l.window_origin();
+        let w = &l.window_sim().world;
+        let erva = (0..w.height)
+            .flat_map(|y| (0..w.width).map(move |x| (x, y)))
+            .find(|&(x, y)| {
+                let perto = std::iter::once((x, y)).chain(w.neighbors(x, y).into_iter().flatten());
+                perto.into_iter().all(|(a, b)| w.resource_at(a, b).is_none()) && w.biomass_at(x, y) >= 4.0 * p.leaf_biomass
+            })
+            .unwrap();
+        ir_para(&mut l, (ox + erva.0, oy + erva.1));
+        l.config.resources.gather_amount = 0.5;
+        assert_eq!(l.gather(), Gather::Got { item: Item::Leaves, amount: 1, broke: None });
+
+        l.config.resources.gather_amount = 3.0;
+        let carry = l.config.resources.carry;
+        let resto = carry - l.inventory().total() - 1;
+        dar(&mut l, Item::Stone, resto);
+        let antes = l.window_sim().world.biomass_at(erva.0, erva.1);
+        assert_eq!(l.gather(), Gather::Got { item: Item::Leaves, amount: 1, broke: None });
+        let gasto = antes - l.window_sim().world.biomass_at(erva.0, erva.1);
+        assert!(gasto < 2.0 * p.leaf_biomass, "gastou {gasto} de erva por uma folha");
+        assert_eq!(l.gather(), Gather::Full);
     }
 
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a

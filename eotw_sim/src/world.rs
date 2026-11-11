@@ -170,10 +170,30 @@ impl World {
 
     /// As árvores voltam a crescer (ver `ResourceParams::regrow`), e as que
     /// voltam a ter madeira voltam a abrigar.
+    /// As árvores só crescem, por isso o abrigo só muda quando uma árvore
+    /// cortada volta a ter `shelter_wood`: só então se refaz (antes refazia-se
+    /// a cada hora de jogo).
     pub fn regrow_resources(&mut self, params: &ResourceParams, days: f32) {
+        let before = self.whole_trees();
         params.regrow(&mut self.resources, days);
+        let threshold_changed = self.shelter_wood != params.shelter_wood;
         self.shelter_wood = params.shelter_wood;
-        self.refresh_cover();
+        if threshold_changed || self.whole_trees() != before {
+            self.refresh_cover();
+        }
+    }
+
+    fn whole_trees(&self) -> usize {
+        self.resources
+            .iter()
+            .filter(|r| r.kind == ResourceKind::Tree && r.amount >= self.shelter_wood)
+            .count()
+    }
+
+    /// A árvore tem madeira que chegue para abrigar (ver `refresh_cover`).
+    pub fn is_whole_tree(&self, x: usize, y: usize) -> bool {
+        self.resource_at(x, y)
+            .is_some_and(|r| r.kind == ResourceKind::Tree && r.amount >= self.shelter_wood)
     }
 
     /// A célula é uma clareira: está ao lado de uma árvore cortada e nenhuma

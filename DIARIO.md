@@ -33,6 +33,26 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira)
+
+### Revisão do código e correção de bugs 🐛
+
+**Porquê:** pediste uma revisão do código à procura de bugs. Pediste também atenção ao desempenho, para quando houver mais espécies.
+
+**O que mudou:**
+- **A fome das raposas longe do jogador.** Nas regiões agregadas, as raposas só morriam de fome com menos de 5 coelhos por raposa, e sempre 5% por dia. Medi a simulação completa: os roedores não chegam para uma raposa viver só deles, e sem coelhos morre cerca de um quarto por dia. A regra fixa passou a ser uma tabela medida, por coelhos por raposa (`fox_hunger`). Com um décimo dos coelhos, ao fim de 30 dias, a agregada passou de 3,9 para 2,8 raposas (a completa tem 1,6). Um primeiro aviso da revisão dizia o contrário, que a agregada era dura demais; a medição mostrou que era branda.
+- **As folhas.** Quando só cabia parte no inventário, gastava-se a erva toda e o painel mostrava a quantidade toda. Agora só se gasta a erva das folhas que couberam. Uma quantidade com casas decimais já não dá zero folhas.
+- **O abrigo de ramos já não se encosta a um toco.** Tem de ser uma árvore que ainda abriga, como no resto do código.
+- **A sombra das árvores** só se refaz quando uma árvore cortada volta a crescer o suficiente. Antes refazia-se a cada hora de jogo.
+
+**Desempenho:** longe do jogador, os animais já não existem um a um. Cada região agregada guarda só quantos há de cada idade, e avança um dia de cada vez. Medi: uma região agregada custa 1,5 µs por dia de jogo, e uma completa 509 µs, ou seja 338 vezes mais. Por isso não vale a pena tirar os animais de todo; o que custa é a janela de 3x3 regiões à volta do jogador. Quando houver mais espécies, cada uma entra na agregada da mesma maneira, como números por idade.
+
+**Testes:** passam 117 no `eotw_sim` e 15 no jogo. Há 3 testes novos: as raposas passam fome como na completa; o abrigo não se encosta a um toco; as folhas que não cabem não gastam erva. A saída da CLI (`--seed 7 --days 200`) ficou igual, byte a byte.
+
+**Próximo passo:** continuar o GDD pela ordem do plano.
+
+---
+
 ## 2026-11-09 (segunda-feira, à tarde)
 
 ### O jogador constrói o seu abrigo 🛖

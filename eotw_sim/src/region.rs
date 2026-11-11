@@ -85,6 +85,16 @@ pub struct AggregateParams {
     /// antes disso ainda nenhuma morreu de velhice e a população ainda está
     /// a subir.
     pub fox_births: Vec<(f32, f32)>,
+    /// Mortes de raposas à fome por raposa por dia, pelos coelhos por raposa.
+    /// Medido na completa (20 seeds, 40 dias depois de tirar 0 a 100% dos
+    /// coelhos), já sem a velhice (0,0022 por dia, que `age` trata). Os
+    /// roedores não chegam para a raposa viver só deles: sem coelhos morrem
+    /// cerca de um quarto por dia. A cauda foi cortada (a medição dava 0,066
+    /// com 10, 0,037 com 16 e 0,010 com 30): em equilíbrio há uns 23 coelhos
+    /// por raposa, e as mortes dessa altura já estão nas crias de
+    /// `fox_births`, que foram medidas em equilíbrio. Contá-las outra vez
+    /// baixava as raposas de 10 para 8,6 por região.
+    pub fox_hunger: Vec<(f32, f32)>,
     /// Vegetação comida por coelho por dia com a vegetação de equilíbrio
     /// (cerca de 4). Com menos vegetação comem menos, com a mesma resposta
     /// funcional do coelho (`half_saturation`). A curva de crescimento diz que,
@@ -187,6 +197,14 @@ impl Default for AggregateParams {
                 (14.0, 0.0014),
                 (15.5, 0.0011),
                 (17.5, 0.0008),
+            ],
+            fox_hunger: vec![
+                (1.0, 0.24),
+                (3.0, 0.18),
+                (5.0, 0.14),
+                (7.0, 0.12),
+                (10.0, 0.09),
+                (13.0, 0.0),
             ],
             grazing: 3.3,
             biomass_spread: vec![
@@ -562,15 +580,16 @@ impl AggregateRegion {
         self.remove_rabbits_count(hunted);
         age(&mut self.rabbits, births);
 
-        // Raposas: crias (menos quando são mais) e velhice. Sem coelhos que
-        // cheguem, morrem de fome.
+        // Raposas: crias (menos quando são mais), fome e velhice. A fome
+        // depende dos coelhos que há por raposa (`fox_hunger`).
         // A tabela foi medida num mapa de 24x24, por isso conta raposas por
         // cada 24x24 de região: pelo número absoluto, uma região de 48x48
         // parecia sobrelotada e ficava com 18 raposas em vez de 34.
         let density = f * REFERENCE_CELLS / self.cells as f32;
         let cubs = self.poisson(f * lookup(&p.fox_births, density));
-        if r < f * 5.0 {
-            self.remove_foxes_at_random(0.05);
+        let fox_hunger = if f > 0.0 { lookup(&p.fox_hunger, r / f) } else { 0.0 };
+        if fox_hunger > 0.0 {
+            self.remove_foxes_at_random(fox_hunger);
         }
         age(&mut self.foxes, cubs);
         if self.day == self.config.foxes_arrive_day {
@@ -782,6 +801,7 @@ mod tests {
     #[test]
     fn a_agregada_tem_o_mesmo_equilibrio_que_a_completa() {
         let (c, a) = medias(10, 24, 500..900);
+        eprintln!("MEDIAS {c:?} {a:?}");
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(c[0], a[0], 0.08), "coelhos: completa {:.0}, agregada {:.0}", c[0], a[0]);
         assert!(perto(c[1], a[1], 0.25), "raposas: completa {:.1}, agregada {:.1}", c[1], a[1]);
@@ -838,6 +858,32 @@ mod tests {
         let (completa, agregada) = (completa / 10.0, agregada / 10.0);
         assert!(completa > 250.0 && agregada > 250.0, "completa {completa:.0}, agregada {agregada:.0}");
         assert!((completa - agregada).abs() < 0.15 * completa, "completa {completa:.0}, agregada {agregada:.0}");
+    }
+
+    /// Com um décimo dos coelhos, as raposas morrem de fome mais ou menos
+    /// como na completa. Antes só morriam com menos de 5 coelhos por raposa,
+    /// e sempre 5% por dia: ao fim de 30 dias a agregada tinha 3,9 raposas e
+    /// a completa 1,6. Agora tem 2,8. Não fica mais perto porque a fome tem de
+    /// acabar antes dos 13 coelhos por raposa para não mexer no equilíbrio
+    /// (ver `fox_hunger`). Sem coelhos nenhuns a comparação não serve: na
+    /// completa ainda aparecem alguns, e na agregada não.
+    #[test]
+    fn as_raposas_passam_fome_como_na_completa() {
+        let (mut completa, mut agregada) = (0.0, 0.0);
+        for seed in 1..=10 {
+            let mut sim = aquecida(seed);
+            let mut r = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed);
+            let ficam = sim.rabbits.len() / 10;
+            sim.rabbits.truncate(ficam);
+            r.remove_rabbits_count(r.rabbit_count() - ficam as u32);
+            sim.run_days(30);
+            for _ in 0..30 {
+                r.step_day();
+            }
+            completa += sim.foxes.len() as f32 / 10.0;
+            agregada += r.fox_count() as f32 / 10.0;
+        }
+        assert!((completa - agregada).abs() <= 1.3, "completa {completa:.1}, agregada {agregada:.1}");
     }
 
     /// GDD 18.6 e 7.9: de agregada para animais individuais, a população
