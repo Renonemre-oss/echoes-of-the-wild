@@ -33,6 +33,25 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira, à noite)
+
+### Guardar e carregar o mundo 💾
+
+**Porquê:** com a fome e a saúde, a Etapa 6 ficou fechada. A Etapa 7 começa por guardar e carregar mundos, que também é a "Persistência" do Prototype 01 (18.2).
+
+**O que mudou:**
+- **F5 guarda o mundo e F9 carrega-o**, em `saves/mundo.json` (a pasta não vai para o git).
+- **Vai tudo para o ficheiro:** a configuração, as regiões longe do jogador, cada coelho e cada raposa à volta dele, a erva, o cheiro, as árvores, o abrigo, o inventário, a fome, a saúde, e até o estado dos números ao acaso. Por isso, depois de carregar, o mundo continua exatamente como teria continuado.
+- **Um ficheiro de outra versão** dá um erro claro em vez de carregar mal.
+- Para isto, o nome do clima e o custo do abrigo deixaram de ser textos fixos no código. A "nunca descansa" dos coelhos deixou de ser infinito (o JSON não guarda infinitos) e passou a ser o maior número possível; o resultado é igual.
+- Num mundo de 8x8 regiões o ficheiro tem 774 KB, e guarda e carrega em 2–3 ms.
+
+**Testes:** passam 123 no `eotw_sim` e 17 no jogo. Há 3 novos: guardar e carregar continua igual, mesmo depois de a janela andar; um ficheiro de outra versão dá erro; um ficheiro guardado no disco volta igual. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** continuar a Etapa 7.
+
+---
+
 ## 2026-11-11 (quarta-feira, à tarde)
 
 ### O jogador tem fome e saúde 🍄

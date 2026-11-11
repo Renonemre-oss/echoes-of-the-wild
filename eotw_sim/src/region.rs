@@ -18,6 +18,7 @@
 //! O que a simulação agregada tem de reproduzir é o comportamento da
 //! completa: o mesmo equilíbrio e a mesma recuperação depois de um choque.
 
+use serde::{Deserialize, Serialize};
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
 use crate::resources::Resource;
@@ -44,7 +45,7 @@ const STREAM_RESOURCES: u64 = 6;
 const SPAWN_TRIES: usize = 50;
 
 /// Os números do modelo agregado, medidos na simulação completa.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AggregateParams {
     /// Nascimentos por coelho adulto por dia, pela reserva (a fração dos
     /// coelhos com energia de `rest_cap` ou mais, ver `AggregateRegion::reserve`):
@@ -277,7 +278,7 @@ fn fraction_below(table: &[(f32, f32)], value: f32) -> f32 {
 }
 
 /// Uma região agregada.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AggregateRegion {
     /// Número de células da região.
     pub cells: usize,

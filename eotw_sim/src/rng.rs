@@ -3,7 +3,8 @@
 //! Porquê não usar uma biblioteca? Para não ter dependências e porque queremos
 //! controlar exatamente a sequência: a mesma seed tem de dar sempre o mesmo mundo.
 
-#[derive(Clone, Debug)]
+use serde::{Deserialize, Serialize};
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Rng {
     state: u64,
 }

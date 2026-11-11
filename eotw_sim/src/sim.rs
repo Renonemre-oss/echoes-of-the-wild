@@ -1,5 +1,6 @@
 //! A simulação: junta o mundo, os coelhos e as raposas e avança no tempo.
 
+use serde::{Deserialize, Serialize};
 use crate::calendar::{CalendarParams, Date};
 use crate::daylight::{self, DaylightParams};
 use crate::fox::{Fox, FoxParams};
@@ -52,7 +53,7 @@ const POPULATION_MILESTONES: [usize; 4] = [50, 100, 200, 300];
 /// Migração de segurança (GDD 7.8, mecanismo 6): se uma espécie ficar abaixo de
 /// um mínimo durante vários dias, chega um indivíduo pela margem do mapa.
 /// Um mínimo de 0 desliga a migração dessa espécie.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MigrationParams {
     pub min_rabbits: usize,
     pub min_foxes: usize,
@@ -81,7 +82,7 @@ impl MigrationParams {
 
 /// O teste da cabana (GDD 18.4): todos os dias o jogador deixa comida junto à
 /// cabana, e contamos quantas vezes cada espécie entra na zona à volta.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CabinParams {
     pub x: usize,
     pub y: usize,
@@ -123,7 +124,7 @@ const CHAIN_WINDOW_TICKS: u64 = 2 * TICKS_PER_DAY;
 /// come os restos e, pouco depois, uma raposa caça um coelho junto à cabana.
 /// A raposa pode ter vindo atrás ou já lá estar (porque a comida também a
 /// atrai): as duas contam, porque em ambas a comida trouxe a presa.
-#[derive(Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct CabinLog {
     pub lines: Vec<String>,
     /// Quantas cadeias coelho → raposa → caça aconteceram.
@@ -196,7 +197,7 @@ impl CabinLog {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
     pub seed: u64,
     pub width: usize,
@@ -265,7 +266,7 @@ impl Config {
 }
 
 /// Resumo de um dia de simulação (uma linha do relatório CSV).
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DayStats {
     pub day: u64,
     pub rabbits: usize,
@@ -290,7 +291,7 @@ pub struct DayStats {
 }
 
 /// Contadores que se vão somando ao longo de um dia e se põem a zero no fim.
-#[derive(Clone, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct DayCounters {
     births: usize,
     deaths_hunger: usize,
@@ -315,6 +316,7 @@ struct Scratch {
     threats: Vec<(usize, usize)>,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Simulation {
     config: Config,
     rng: Rng,
@@ -330,6 +332,7 @@ pub struct Simulation {
     tick: u64,
     /// Grelhas espaciais e listas auxiliares, refeitas em cada tick e
     /// guardadas aqui só para não alocar memória de novo.
+    #[serde(skip)]
     scratch: Scratch,
     /// A partir de quantos pares coelho × raposa se usam as grelhas
     /// (`GRID_MIN_PAIRS`; os testes mudam-no para comparar os dois caminhos).

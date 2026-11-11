@@ -5,11 +5,12 @@
 //! animais não sabem onde está a comida: só cheiram a sua célula e as 4 à
 //! volta, e sobem o gradiente do tipo que lhes interessa.
 
+use serde::{Deserialize, Serialize};
 use crate::rng::Rng;
 use crate::world::World;
 
 /// Os tipos de cheiro que já existem. Carcaça e predador vêm mais tarde.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scent {
     /// Restos de comida deixados pelo jogador.
     Food = 0,
@@ -31,7 +32,7 @@ pub const KINDS: usize = 3;
 /// isso 1e-6 é um milionésimo disso (ver DIARIO.md).
 const FLOOR: f32 = 1e-6;
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ScentParams {
     /// Fração do cheiro de uma célula que se troca com as vizinhas em cada tick.
     pub diffusion: f32,
@@ -58,7 +59,7 @@ impl Default for ScentParams {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ScentField {
     width: usize,
     height: usize,

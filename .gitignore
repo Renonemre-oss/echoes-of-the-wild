@@ -1,2 +1,4 @@
 /target
 *.csv
+# Os mundos guardados no jogo (F5).
+/saves

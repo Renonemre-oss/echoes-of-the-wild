@@ -1399,7 +1399,7 @@ Isto permite aprender lógica e estruturas de dados sem misturar logo dificuldad
 
 ## Etapa 7 — Persistência e expansão
 
-- Guardar e carregar mundos.
+- Guardar e carregar mundos. **Feito (versão simples):** F5 guarda o mundo todo em `saves/mundo.json` e F9 carrega-o. Vai tudo: a configuração, as regiões agregadas, a janela com cada animal, a erva, o cheiro, as árvores, o abrigo, o inventário, a fome e a saúde, e o estado dos números ao acaso. Por isso o mundo carregado continua exatamente como o original teria continuado (há um teste que o confirma). Um ficheiro de outra versão do formato dá um erro claro. Num mundo de 8x8 regiões o ficheiro tem 774 KB e guarda e carrega em poucos milissegundos. Por agora só há um ficheiro.
 - Testar alterações ambientais persistentes.
 - Acrescentar novas espécies.
 - Acrescentar novas regiões e biomas.

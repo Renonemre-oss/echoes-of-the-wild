@@ -7,12 +7,13 @@
 //! árvore não muda a erva nem o abrigo. As árvores voltam a crescer devagar;
 //! as pedras esgotam-se.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::rng::Rng;
 
 /// O que se leva no inventário.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Item {
     Wood,
     Stone,
@@ -37,7 +38,7 @@ impl Item {
 
 /// Uma ferramenta (GDD 10.4: ferramentas de recolha). Recolhe o dobro do
 /// recurso a que se destina, e parte-se ao fim de `tool_uses` recolhas.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tool {
     Axe,
     Pickaxe,
@@ -80,7 +81,7 @@ impl Tool {
 }
 
 /// O tipo de recurso no terreno.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceKind {
     Tree,
     Rock,
@@ -97,7 +98,7 @@ impl ResourceKind {
 }
 
 /// Uma árvore ou uma pedra numa célula, com o que ainda tem para dar.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Resource {
     pub x: usize,
     pub y: usize,
@@ -105,7 +106,7 @@ pub struct Resource {
     pub amount: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ResourceParams {
     /// Árvores e pedras em cada mapa de `REFERENCE_CELLS` células (24x24).
     pub trees: usize,
@@ -201,7 +202,7 @@ impl ResourceParams {
 }
 
 /// O que o jogador leva consigo.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Inventory {
     items: BTreeMap<Item, u32>,
     /// As ferramentas, no máximo uma de cada, com as recolhas que ainda aguentam.

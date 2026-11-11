@@ -114,7 +114,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (controls, walk, gather, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot, measure).chain(),
+            (controls, walk, gather, save_load, advance, follow, draw_tiles, draw_animals, draw_panel, screenshot, measure).chain(),
         )
         .run();
 }
@@ -457,6 +457,41 @@ fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: R
     }
 }
 
+/// Onde fica o mundo guardado, na pasta de onde se corre o jogo.
+const SAVE_PATH: &str = "saves/mundo.json";
+
+/// F5 guarda o mundo todo num ficheiro e F9 carrega-o (GDD 18.2,
+/// Persistência). Só há um ficheiro: guardar outra vez substitui-o.
+fn save_load(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: ResMut<GatherNote>) {
+    if keys.just_pressed(KeyCode::F5) {
+        note.0 = match save_world(&world.0, std::path::Path::new(SAVE_PATH)) {
+            Ok(()) => format!("Mundo guardado em {SAVE_PATH} (F9 para carregar)."),
+            Err(e) => format!("Não consegui guardar: {e}"),
+        };
+    }
+    if keys.just_pressed(KeyCode::F9) {
+        note.0 = match load_world(std::path::Path::new(SAVE_PATH)) {
+            Ok(land) => {
+                world.0 = land;
+                format!("Mundo carregado de {SAVE_PATH}.")
+            }
+            Err(e) => format!("Não consegui carregar: {e}"),
+        };
+    }
+}
+
+fn save_world(land: &Landscape, path: &std::path::Path) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, land.save()).map_err(|e| e.to_string())
+}
+
+fn load_world(path: &std::path::Path) -> Result<Landscape, String> {
+    let text = std::fs::read_to_string(path).map_err(|_| "ainda não há nenhum mundo guardado (F5 guarda)".to_string())?;
+    Landscape::load(&text)
+}
+
 /// A frase do painel para o resultado de procurar comida.
 fn forage_note(result: Gather) -> String {
     match result {
@@ -761,7 +796,7 @@ fn draw_panel(
          No mundo: {} coelhos, {} raposas\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
          {}\n{}\n{}{}\n\n\
-         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\nF: procurar comida na erva (1 hora)\nC: comer\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
+         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\nF: procurar comida na erva (1 hora)\nC: comer\nF5: guardar o mundo; F9: carregar\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde escuro: árvore (abrigo)\n  cinzento: pedra\n  \
          verde a castanho: muita a pouca erva{}",
@@ -989,6 +1024,19 @@ mod tests {
         let land = &app.world().resource::<World>().0;
         assert!(land.needs().food > fome);
         assert!(needs_line(land).starts_with("Fome: "));
+    }
+
+    /// O que se guarda num ficheiro volta igual ao carregar.
+    #[test]
+    fn guardar_e_carregar_um_ficheiro() {
+        let dir = std::env::temp_dir().join(format!("eotw_teste_{}", std::process::id()));
+        let path = dir.join("mundo.json");
+        assert!(load_world(&path).err().unwrap().contains("ainda não há"));
+        let land = paisagem((12, 12));
+        save_world(&land, &path).unwrap();
+        let Ok(de_novo) = load_world(&path) else { panic!("não carregou") };
+        assert_eq!(de_novo.save(), land.save());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

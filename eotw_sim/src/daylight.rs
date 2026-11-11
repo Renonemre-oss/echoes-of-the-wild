@@ -5,9 +5,10 @@
 //! perde mais visão do que a raposa, por isso a raposa caça melhor de noite.
 //! O olfato não muda, e de noite conta mais.
 
+use serde::{Deserialize, Serialize};
 use crate::sim::TICKS_PER_DAY;
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DaylightParams {
     /// A hora em que o amanhecer começa (a luz começa a subir).
     pub dawn: u64,

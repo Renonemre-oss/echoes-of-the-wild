@@ -14,6 +14,7 @@
 //! igual todo o ano, e o calendário só prepara as regras que vão depender
 //! dele (reprodução por época, dispersão, grupos).
 
+use serde::{Deserialize, Serialize};
 use crate::sim::TICKS_PER_DAY;
 
 /// Os nomes dos meses, a começar em janeiro.
@@ -42,7 +43,7 @@ impl Season {
 }
 
 /// Quanto criam os coelhos num mês.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Breeding {
     /// Nenhuma fêmea prenhe.
     Nao,
@@ -54,7 +55,7 @@ pub enum Breeding {
 }
 
 /// A fase do ano da raposa.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FoxPhase {
     /// Cio e acasalamento (o cio de cada fêmea dura 1–6 dias).
     Acasalamento,
@@ -86,9 +87,9 @@ impl FoxPhase {
 
 /// O que acontece em cada mês num tipo de clima. Os meses são os do
 /// hemisfério norte; um clima do sul tem `hemisphere_shift` de 6.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Climate {
-    pub name: &'static str,
+    pub name: String,
     /// Meses a somar para passar do calendário do norte ao local: 0 no norte,
     /// 6 no sul (onde a época de reprodução cai em agosto–março).
     pub hemisphere_shift: usize,
@@ -127,7 +128,7 @@ impl Climate {
     /// acasalamentos no início de janeiro.
     pub fn iberia() -> Self {
         Self {
-            name: "mediterrânico ibérico",
+            name: "mediterrânico ibérico".into(),
             hemisphere_shift: 0,
             //                jan fev mar abr mai jun jul ago set out nov dez
             rabbit_breeding: [S, S, P, P, S, S, N, N, N, Q, S, S],
@@ -143,7 +144,7 @@ impl Climate {
     /// janeiro e parem em março (Cavallini & Santini 1995).
     pub fn oceanic() -> Self {
         Self {
-            name: "temperado oceânico",
+            name: "temperado oceânico".into(),
             hemisphere_shift: 0,
             rabbit_breeding: [Q, S, S, P, P, P, S, S, Q, N, N, N],
             fox_phase: [Ac, Ge, Ct, Ct, Cf, Cf, Fa, Fa, Fa, Di, Di, Di],
@@ -158,7 +159,7 @@ impl Climate {
     /// ou março, mais tarde quanto mais a norte (Cavallini & Santini 1995).
     pub fn continental() -> Self {
         Self {
-            name: "temperado continental",
+            name: "temperado continental".into(),
             hemisphere_shift: 0,
             rabbit_breeding: [N, N, S, P, P, S, S, S, Q, N, N, N],
             fox_phase: [Di, Ac, Ge, Ct, Ct, Cf, Cf, Fa, Fa, Di, Di, Di],
@@ -178,7 +179,7 @@ impl Climate {
     /// Bristol é deslocada seis meses.
     pub fn southern() -> Self {
         Self {
-            name: "temperado do sul",
+            name: "temperado do sul".into(),
             hemisphere_shift: 6,
             // Em meses do norte: o índice 2 (março) é setembro local.
             rabbit_breeding: [N, Q, P, P, P, S, S, S, Q, N, N, N],
@@ -187,7 +188,7 @@ impl Climate {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CalendarParams {
     /// Dias de jogo em cada mês. Ver o comentário do módulo.
     pub days_per_month: u64,

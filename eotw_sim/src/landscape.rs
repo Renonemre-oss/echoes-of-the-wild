@@ -20,6 +20,7 @@
 //! medida na completa (`rabbits_cross` e `foxes_cross`). É isso que deixa uma
 //! região vazia voltar a ter coelhos e raposas.
 
+use serde::{Deserialize, Serialize};
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
 use crate::region::{AggregateParams, AggregateRegion};
@@ -74,6 +75,7 @@ struct Cut {
 }
 
 /// A janela completa: que regiões cobre e a simulação delas.
+#[derive(Serialize, Deserialize)]
 struct Window {
     /// A região do canto de cima à esquerda, e quantas regiões tem de lado.
     rx: usize,
@@ -89,6 +91,7 @@ impl Window {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Landscape {
     pub cols: usize,
     pub rows: usize,
@@ -119,6 +122,22 @@ pub struct Landscape {
     shelter: Option<Shelter>,
     /// A fome e a saúde do jogador.
     needs: Needs,
+}
+
+/// A versão do formato dos ficheiros guardados. Sobe quando o que se guarda
+/// muda, para um ficheiro antigo dar um erro claro em vez de carregar mal.
+pub const SAVE_VERSION: u32 = 1;
+
+#[derive(Serialize)]
+struct SaveRef<'a> {
+    version: u32,
+    landscape: &'a Landscape,
+}
+
+#[derive(Deserialize)]
+struct SaveFile {
+    version: u32,
+    landscape: Landscape,
 }
 
 /// O resultado de uma tentativa de recolha (`Landscape::gather`).
@@ -245,6 +264,27 @@ impl Landscape {
 
     pub fn inventory(&self) -> &Inventory {
         &self.inventory
+    }
+
+    /// O mundo todo em texto (JSON), para guardar num ficheiro (GDD 18.2,
+    /// Persistência): as regiões agregadas, a janela com cada animal, a
+    /// erva, o cheiro, as árvores, o abrigo, o inventário, a fome e a saúde,
+    /// e a configuração. Carregado com `load`, continua exatamente como
+    /// teria continuado: a mesma seed dá o mesmo resultado.
+    pub fn save(&self) -> String {
+        serde_json::to_string(&SaveRef { version: SAVE_VERSION, landscape: self })
+            .expect("o estado não tem nada que o JSON não guarde")
+    }
+
+    pub fn load(text: &str) -> Result<Self, String> {
+        let file: SaveFile = serde_json::from_str(text).map_err(|e| format!("o ficheiro não se lê: {e}"))?;
+        if file.version != SAVE_VERSION {
+            return Err(format!(
+                "o ficheiro é da versão {} e este jogo lê a versão {SAVE_VERSION}",
+                file.version
+            ));
+        }
+        Ok(file.landscape)
     }
 
     pub fn needs(&self) -> &Needs {
@@ -1100,6 +1140,41 @@ mod tests {
         assert!(l.eat());
         assert_eq!(l.needs().food, (fome + p.meal).min(100.0));
         assert_eq!(l.inventory().count(Item::Food), 0);
+    }
+
+    /// Guardar e carregar não muda nada: o mundo carregado continua
+    /// exatamente como o original, mesmo depois de a janela se deslocar.
+    #[test]
+    fn guardar_e_carregar_continua_igual() {
+        let mut l = paisagem(3, 3, (36, 36));
+        l.run_days(2);
+        let lado = ao_lado_de_arvore(&l, (36, 36));
+        ir_para(&mut l, lado);
+        dar(&mut l, Item::Wood, 6);
+        assert_eq!(l.build(), Build::Built(Stage::Ramos));
+        l.forage();
+        let texto = l.save();
+        let Ok(mut c) = Landscape::load(&texto) else { panic!("não carregou") };
+        assert_eq!(c.save(), texto);
+        for o in [&mut l, &mut c] {
+            o.run_days(3);
+            for _ in 0..REGION {
+                o.move_player(1, 0);
+            }
+            o.run_days(2);
+        }
+        assert_eq!(c.save(), l.save());
+        assert_eq!(c.shelter(), l.shelter());
+        assert_eq!(c.needs(), l.needs());
+    }
+
+    #[test]
+    fn um_ficheiro_de_outra_versao_da_erro() {
+        let l = paisagem(1, 1, (12, 12));
+        let texto = l.save().replacen(&format!("\"version\":{SAVE_VERSION}"), "\"version\":999", 1);
+        let erro = Landscape::load(&texto).err().unwrap();
+        assert!(erro.contains("versão 999"), "{erro}");
+        assert!(Landscape::load("isto não é um mundo").is_err());
     }
 
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a

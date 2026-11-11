@@ -15,12 +15,13 @@
 //! - só se reproduz se não houver outra raposa perto (um travão de densidade),
 //!   a não ser que haja restos de comida que cheguem para mais raposas.
 
+use serde::{Deserialize, Serialize};
 use crate::rabbit::Rabbit;
 use crate::rng::Rng;
 use crate::scent::{sniff, Scent};
 use crate::world::{distance, step_away, step_toward, World};
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FoxParams {
     pub energy_max: f32,
     pub energy_start: f32,
@@ -179,7 +180,7 @@ impl Default for FoxParams {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Fox {
     pub x: usize,
     pub y: usize,

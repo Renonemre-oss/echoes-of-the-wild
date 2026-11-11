@@ -7,8 +7,9 @@
 //! jogador procura (tecla F) e come depois (tecla C). Procurar gasta erva,
 //! por isso o jogador compete com os coelhos.
 
+use serde::{Deserialize, Serialize};
 /// Os números da fome e da saúde. Ambas vão de 0 a 100.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct NeedsParams {
     /// Quanto a saciedade desce por hora. Com 1,4, cheio fica com fome ao fim
     /// de três dias de jogo, e por dia gasta 34: cerca de uma refeição e meia.
@@ -47,7 +48,7 @@ impl Default for NeedsParams {
 }
 
 /// A fome e a saúde do jogador.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Needs {
     /// Saciedade: 100 é cheio, 0 é fome.
     pub food: f32,

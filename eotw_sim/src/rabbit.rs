@@ -11,11 +11,12 @@
 //! como os coelhos bravos, que digerem na lura de dia (cecotrofia) e comem
 //! ao crepúsculo e de noite. Os outros continuam ativos.
 
+use serde::{Deserialize, Serialize};
 use crate::rng::Rng;
 use crate::scent::{sniff, Scent};
 use crate::world::{distance, step_away, step_toward, World};
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RabbitParams {
     pub energy_max: f32,
     pub energy_start: f32,
@@ -53,7 +54,7 @@ pub struct RabbitParams {
     /// de noite, quase não davam pelo jogador às escuras.
     pub player_hearing: usize,
     /// Com esta energia ou mais, o coelho vai descansar para a toca em vez de
-    /// comer. Fora do meio-dia não descansa (infinito): come até `full_energy`.
+    /// comer. Fora do meio-dia não descansa (`f32::MAX`): come até `full_energy`.
     pub rest_above: f32,
     /// O mesmo, ao meio-dia (GDD 7.1: alternar atividade e repouso). Os
     /// coelhos com menos energia continuam ativos, como no resto do dia.
@@ -112,7 +113,8 @@ impl Default for RabbitParams {
             vision: 3,
             night_vision: 2,
             player_hearing: 3,
-            rest_above: f32::INFINITY,
+            // O maior número, e não o infinito, que o JSON não guarda.
+            rest_above: f32::MAX,
             midday_rest_above: 40.0,
             rest_range: 6,
             rest_recovery: 1.5,
@@ -125,7 +127,7 @@ impl Default for RabbitParams {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Rabbit {
     pub x: usize,
     pub y: usize,

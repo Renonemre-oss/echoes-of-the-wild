@@ -2,11 +2,12 @@
 //!
 //! GDD 7.7: a vegetação é um recurso que se gasta e se regenera, não só decoração.
 
+use serde::{Deserialize, Serialize};
 use crate::resources::{Resource, ResourceKind, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::ScentField;
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VegetationParams {
     /// Biomassa máxima de uma célula.
     pub capacity: f32,
@@ -30,7 +31,7 @@ impl Default for VegetationParams {
 /// Até quantas células à volta (em quadrado) uma árvore abriga os coelhos.
 pub const TREE_COVER: usize = 1;
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct World {
     pub width: usize,
     pub height: usize,

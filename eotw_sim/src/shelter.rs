@@ -14,10 +14,11 @@
 //! ainda não tem frio nem cansaço. O que já faz é cheirar a gente: os
 //! animais afastam-se do acampamento, e mais quando há lareira (fumo).
 
+use serde::{Deserialize, Serialize};
 use crate::resources::Item;
 
 /// As etapas, pela ordem em que se constroem.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     /// Um abrigo de ramos (lean-to): uma trave entre duas árvores e 5–8 varas
     /// encostadas (FM 21-76). Corta o vento de um lado.
@@ -58,13 +59,13 @@ impl Stage {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ShelterParams {
     /// O que cada etapa custa, por ordem de `Stage::ALL`. São decisões de
     /// jogo, comprimidas: o manual pede 5–8 varas para o abrigo de ramos, e
     /// uma árvore inteira dá 4 de madeira, por isso 6 de madeira já obriga
     /// a cortar duas árvores.
-    pub cost: [&'static [(Item, u32)]; 4],
+    pub cost: [Vec<(Item, u32)>; 4],
     /// Horas de jogo que cada etapa demora. Uma pessoa sozinha faz uma
     /// cabana leve de ramos e folhas em poucas horas (Baka, Mbuti, San,
     /// Apache, Nenets), e um acampamento de wickiups levou quase um dia de
@@ -83,10 +84,10 @@ impl Default for ShelterParams {
     fn default() -> Self {
         Self {
             cost: [
-                &[(Item::Wood, 6)],
-                &[(Item::Leaves, 10)],
-                &[(Item::Stone, 8), (Item::Wood, 6)],
-                &[(Item::Stone, 6)],
+                vec![(Item::Wood, 6)],
+                vec![(Item::Leaves, 10)],
+                vec![(Item::Stone, 8), (Item::Wood, 6)],
+                vec![(Item::Stone, 6)],
             ],
             hours: [2, 3, 6, 4],
             scent_per_tick: [1.0, 1.5, 2.0, 6.0],
@@ -96,8 +97,8 @@ impl Default for ShelterParams {
 }
 
 impl ShelterParams {
-    pub fn cost_of(&self, stage: Stage) -> &'static [(Item, u32)] {
-        self.cost[stage as usize]
+    pub fn cost_of(&self, stage: Stage) -> &[(Item, u32)] {
+        &self.cost[stage as usize]
     }
 
     pub fn hours_of(&self, stage: Stage) -> u64 {
@@ -110,7 +111,7 @@ impl ShelterParams {
 }
 
 /// O abrigo, numa célula da paisagem inteira.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shelter {
     pub x: usize,
     pub y: usize,
