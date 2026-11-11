@@ -630,7 +630,11 @@ fn draw_tiles(
             continue;
         };
         visible.set_if_neq(Visibility::Visible);
-        let mut color = vegetation_color(w.biomass_at(x, y) / w.capacity());
+        let mut color = if w.is_water(x, y) {
+            WATER
+        } else {
+            vegetation_color(w.biomass_at(x, y) / w.capacity())
+        };
         if smell.0 {
             let human = w.scent.at(Scent::Human, x, y);
             let food = w.scent.at(Scent::Food, x, y);
@@ -642,6 +646,10 @@ fn draw_tiles(
         }
     }
 }
+
+/// A cor do rio: azul-esverdeado claro, para não se confundir com o jogador
+/// (azul) nem com o cheiro humano.
+const WATER: Color = Color::srgb(0.30, 0.62, 0.72);
 
 /// Mistura a cor da célula com azul (cheiro humano) e amarelo (comida).
 /// O azul fica forte a partir de 1, perto do valor que já afasta as raposas.
@@ -798,7 +806,7 @@ fn draw_panel(
          {}\n{}\n{}{}\n\n\
          Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\nF: procurar comida na erva (1 hora)\nC: comer\nF5: guardar o mundo; F9: carregar\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
-         verde escuro: árvore (abrigo)\n  cinzento: pedra\n  \
+         verde escuro: árvore (abrigo)\n  cinzento: pedra\n  azul-esverdeado: rio (os animais só passam nos vaus)\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,

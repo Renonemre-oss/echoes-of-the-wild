@@ -297,6 +297,8 @@ pub struct AggregateRegion {
     /// As árvores e as pedras, com o que ainda têm: também são terreno, e
     /// as árvores continuam a crescer enquanto a região está agregada.
     pub resources: Vec<Resource>,
+    /// As células de rio: terreno, como as tocas. Não contam em `cells`.
+    pub water: Vec<(usize, usize)>,
     pub day: u64,
     config: Config,
     params: AggregateParams,
@@ -325,6 +327,7 @@ impl AggregateRegion {
             foxes: vec![0; fox_days],
             burrows,
             resources,
+            water: Vec::new(),
             day: 0,
             config,
             params,
@@ -364,6 +367,8 @@ impl AggregateRegion {
         region.biomass = world.mean_biomass();
         region.burrows = world.burrows().to_vec();
         region.resources = world.resources().to_vec();
+        region.water = world.water_cells();
+        region.cells = world.land_cells();
         for r in rabbits {
             region.add_rabbit(r.age);
         }
@@ -452,6 +457,11 @@ impl AggregateRegion {
         for r in &self.resources {
             world.add_resource(r.clone());
         }
+        for &(x, y) in &self.water {
+            world.add_water(x, y);
+        }
+        let water = &self.water;
+        let clear = &|cell: (usize, usize)| clear(cell) && !water.contains(&cell);
         let spread: Vec<f32> = (0..w * h).map(|_| lookup(&p.biomass_spread, rng.next_f32())).collect();
         let mut scale = self.biomass / (spread.iter().sum::<f32>() / (w * h) as f32);
         // As células que passariam da capacidade ficam nela e a média desce

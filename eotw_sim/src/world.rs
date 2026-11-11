@@ -60,6 +60,11 @@ pub struct World {
     /// animais só os leem.
     pub scent: ScentField,
     params: VegetationParams,
+    /// Células de rio (ver `river.rs`). Não têm erva, e os animais não
+    /// entram nelas: `neighbors` não as dá.
+    water: Vec<bool>,
+    /// Quantas há, para não contar de novo.
+    water_count: usize,
 }
 
 impl World {
@@ -80,7 +85,31 @@ impl World {
             shelter_wood: ResourceParams::default().shelter_wood,
             scent: ScentField::new(width, height),
             params,
+            water: vec![false; width * height],
+            water_count: 0,
         }
+    }
+
+    /// Põe água numa célula: fica sem erva para sempre.
+    pub fn add_water(&mut self, x: usize, y: usize) {
+        let i = self.idx(x, y);
+        if !self.water[i] {
+            self.water[i] = true;
+            self.water_count += 1;
+        }
+        self.biomass[i] = 0.0;
+    }
+
+    pub fn is_water(&self, x: usize, y: usize) -> bool {
+        self.water[self.idx(x, y)]
+    }
+
+    /// As células de água, por ordem de linha e coluna.
+    pub fn water_cells(&self) -> Vec<(usize, usize)> {
+        (0..self.width * self.height)
+            .filter(|&i| self.water[i])
+            .map(|i| (i % self.width, i / self.width))
+            .collect()
     }
 
     fn idx(&self, x: usize, y: usize) -> usize {
@@ -109,7 +138,10 @@ impl World {
         let k = self.params.capacity;
         let regrowth = self.params.regrowth;
         let seed_growth = self.params.seed_growth;
-        for b in &mut self.biomass {
+        for (b, &water) in self.biomass.iter_mut().zip(&self.water) {
+            if water {
+                continue;
+            }
             let room = 1.0 - *b / k;
             *b += (regrowth * *b + seed_growth * k) * room;
             *b = b.clamp(0.0, k);
@@ -136,7 +168,7 @@ impl World {
     /// Põe a biomassa de uma célula num valor (limitado à capacidade).
     pub fn set_biomass(&mut self, x: usize, y: usize, value: f32) {
         let i = self.idx(x, y);
-        self.biomass[i] = value.clamp(0.0, self.params.capacity);
+        self.biomass[i] = if self.water[i] { 0.0 } else { value.clamp(0.0, self.params.capacity) };
     }
 
     pub fn is_burrow(&self, x: usize, y: usize) -> bool {
@@ -283,19 +315,31 @@ impl World {
         total
     }
 
+    /// A vegetação média das células de terra (a água não conta).
     pub fn mean_biomass(&self) -> f32 {
-        self.biomass.iter().sum::<f32>() / self.biomass.len() as f32
+        self.biomass.iter().sum::<f32>() / (self.biomass.len() - self.water_count) as f32
+    }
+
+    /// Quantas células são de terra.
+    pub fn land_cells(&self) -> usize {
+        self.width * self.height - self.water_count
     }
 
     /// As (até) 4 células vizinhas: cima, baixo, esquerda, direita.
     /// Devolve `None` nas posições que ficam fora do mapa.
+    /// A água conta como fora do mapa: é por aqui que os animais não entram
+    /// no rio.
     pub fn neighbors(&self, x: usize, y: usize) -> [Option<(usize, usize)>; 4] {
-        [
+        let cells = [
             if y > 0 { Some((x, y - 1)) } else { None },
             if y + 1 < self.height { Some((x, y + 1)) } else { None },
             if x > 0 { Some((x - 1, y)) } else { None },
             if x + 1 < self.width { Some((x + 1, y)) } else { None },
-        ]
+        ];
+        if self.water_count == 0 {
+            return cells;
+        }
+        cells.map(|c| c.filter(|&(a, b)| !self.water[self.idx(a, b)]))
     }
 }
 

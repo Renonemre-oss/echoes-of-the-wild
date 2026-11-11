@@ -64,6 +64,7 @@ const STREAM_START: u64 = 11;
 const STREAM_REGION: u64 = 12;
 const STREAM_WINDOW: u64 = 13;
 const STREAM_CROSSING: u64 = 14;
+const STREAM_RIVER: u64 = 15;
 
 /// O que existe numa região cortada da janela: o terreno, o cheiro e os
 /// animais, em coordenadas da região (0 a 23).
@@ -126,7 +127,7 @@ pub struct Landscape {
 
 /// A versão do formato dos ficheiros guardados. Sobe quando o que se guarda
 /// muda, para um ficheiro antigo dar um erro claro em vez de carregar mal.
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct SaveRef<'a> {
@@ -169,7 +170,7 @@ impl Landscape {
             ..config
         };
         let params = AggregateParams::default();
-        let regions = (0..cols * rows)
+        let mut regions: Vec<Option<AggregateRegion>> = (0..cols * rows)
             .map(|id| {
                 let seed = Rng::derived(&[config.seed, id as u64, STREAM_START]).next_u64();
                 let sim = Simulation::warmed_up(Config {
@@ -186,6 +187,18 @@ impl Landscape {
             })
             .collect();
         let player = (player.0.min(cols * REGION - 1), player.1.min(rows * REGION - 1));
+        // O rio é terreno: tira as tocas, as árvores e as pedras de onde passa.
+        let mut flow = Rng::derived(&[config.seed, STREAM_RIVER]);
+        for (x, y) in config.river.trace(&mut flow, cols * REGION, rows * REGION, player.0) {
+            let region = regions[(y / REGION) * cols + x / REGION].as_mut().expect("região");
+            let cell = (x % REGION, y % REGION);
+            region.water.push(cell);
+            region.burrows.retain(|&b| b != cell);
+            region.resources.retain(|r| (r.x, r.y) != cell);
+        }
+        for region in regions.iter_mut().flatten() {
+            region.cells = REGION * REGION - region.water.len();
+        }
         let rng = Rng::derived(&[config.seed, STREAM_CROSSING]);
         // Uma janela vazia, só para a estrutura existir; `open_window` faz a verdadeira.
         let empty = Window {
@@ -418,7 +431,10 @@ impl Landscape {
                     return Build::Blocked;
                 };
                 let world = &self.window.sim.world;
-                if world.resource_at(here.0, here.1).is_some() || world.is_burrow(here.0, here.1) {
+                if world.resource_at(here.0, here.1).is_some()
+                    || world.is_burrow(here.0, here.1)
+                    || world.is_water(here.0, here.1)
+                {
                     return Build::Blocked;
                 }
                 // Um toco cortado não aguenta os ramos: tem de ser uma árvore
@@ -634,6 +650,9 @@ impl Landscape {
                 for &(x, y) in cut.world.burrows() {
                     world.add_burrow(ox + x, oy + y);
                 }
+                for (x, y) in cut.world.water_cells() {
+                    world.add_water(ox + x, oy + y);
+                }
                 for r in cut.world.resources() {
                     world.add_resource(Resource { x: ox + r.x, y: oy + r.y, ..r.clone() });
                 }
@@ -686,6 +705,13 @@ impl Landscape {
         }
         for r in sim.world.resources().iter().filter(|r| inside(r.x, r.y)) {
             world.add_resource(Resource { x: r.x - x0, y: r.y - y0, ..r.clone() });
+        }
+        for y in 0..REGION {
+            for x in 0..REGION {
+                if sim.world.is_water(x0 + x, y0 + y) {
+                    world.add_water(x, y);
+                }
+            }
         }
         let rabbits = sim
             .rabbits
@@ -848,8 +874,10 @@ impl Landscape {
             _ => (REGION - 1 - depth, along),
         };
         let cell = (x0 + lx, y0 + ly);
-        if distance((ox + cell.0, oy + cell.1), self.player) <= SPAWN_CLEAR_RADIUS {
-            // Não aparece à frente do jogador: fica na região de onde vinha.
+        let near = distance((ox + cell.0, oy + cell.1), self.player) <= SPAWN_CLEAR_RADIUS;
+        if near || self.window.sim.world.is_water(cell.0, cell.1) {
+            // Não aparece à frente do jogador nem no rio: fica na região de
+            // onde vinha.
             let r = self.regions[side.1 * self.cols + side.0].as_mut().expect("vizinho agregado");
             if fox {
                 r.add_fox(age);
@@ -1177,6 +1205,42 @@ mod tests {
         assert!(Landscape::load("isto não é um mundo").is_err());
     }
 
+    /// O rio atravessa a paisagem: não tem erva, nem tocas, árvores ou
+    /// pedras, e nenhum animal está nele. Quando a janela anda, fica igual.
+    #[test]
+    fn o_rio_corta_a_paisagem() {
+        let mut l = paisagem(1, 3, (12, 12));
+        let agua = |l: &Landscape| {
+            let (ox, oy) = l.window_origin();
+            let mut v: Vec<_> = l.window_sim().world.water_cells().iter().map(|&(x, y)| (ox + x, oy + y)).collect();
+            for ry in 0..l.rows {
+                for rx in 0..l.cols {
+                    if let Some(r) = l.region(rx, ry) {
+                        v.extend(r.water.iter().map(|&(x, y)| (rx * REGION + x, ry * REGION + y)));
+                    }
+                }
+            }
+            v.sort();
+            v
+        };
+        let antes = agua(&l);
+        assert!(antes.len() > 3 * REGION, "o rio atravessa o mapa: {} células", antes.len());
+        for _ in 0..3 {
+            l.run_days(1);
+            let w = &l.window_sim().world;
+            for &(x, y) in &w.water_cells() {
+                assert_eq!(w.biomass_at(x, y), 0.0);
+                assert!(!w.is_burrow(x, y) && w.resource_at(x, y).is_none());
+            }
+            assert!(l.window_sim().rabbits.iter().all(|r| !w.is_water(r.x, r.y)));
+            assert!(l.window_sim().foxes.iter().all(|f| !w.is_water(f.x, f.y)));
+        }
+        ir_para(&mut l, (2 * REGION + 12, 2 * REGION + 12));
+        assert_eq!(agua(&l), antes);
+        let w = &l.window_sim().world;
+        assert!(l.window_sim().rabbits.iter().all(|r| !w.is_water(r.x, r.y)));
+    }
+
     /// GDD 19, Etapa 7: o que o jogador muda no mundo fica, quando se afasta
     /// (a região passa a agregada) e volta, e quando guarda e carrega. As
     /// árvores cortadas continuam cortadas (e a crescer), com a clareira à
@@ -1256,10 +1320,16 @@ mod tests {
     }
 
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a
-    /// janela se desloca, e há as mesmas em cada região.
+    /// janela se desloca, e há as mesmas em cada região. Sem rio, que tira
+    /// as que estão no caminho (ver `o_rio_corta_a_paisagem`).
     #[test]
     fn as_arvores_e_as_pedras_ficam_quando_a_janela_anda() {
-        let mut l = paisagem(1, 4, (47, 36));
+        let config = Config {
+            seed: 1,
+            river: crate::river::RiverParams { enabled: false, ..Default::default() },
+            ..Config::default()
+        };
+        let mut l = Landscape::new(config, 4, 4, (47, 36));
         let antes = recursos(&l);
         let p = ResourceParams::default();
         assert_eq!(antes.len(), 16 * (p.trees + p.rocks));

@@ -1265,6 +1265,8 @@ O primeiro protótipo deve provar que um pequeno ecossistema consegue criar situ
 | Tempo | Ciclo de dia e noite |
 | Persistência | Guardar e carregar o estado básico do mundo |
 
+**No Prototype 01 (rio, versão simplificada, ainda sem pesquisa):** um rio de 2 células de largura atravessa a paisagem de norte a sul, a serpentear até 4 células para cada lado, com um vau (uma linha sem água) a cada 12 células (`river.rs`). Começa a mais de 12 células do jogador. A água não tem erva, nem tocas, árvores ou pedras. Os animais não entram nela: atravessam só nos vaus. Isto faz-se em `World::neighbors`, que não dá células de água, e por isso todos os passos dos animais respeitam o rio. Nenhum animal aparece na água. O jogador passa a vau por todo o lado, mas não constrói nem procura comida na água. Só a paisagem tem rio; uma simulação de uma região sozinha (a CLI) fica igual. Fica para depois: beber, peixes, margens com mais erva, e o rio como caminho do cheiro e do som.
+
 ## 18.3. Fora do âmbito do primeiro protótipo
 
 - Multiplayer.

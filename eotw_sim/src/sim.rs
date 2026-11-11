@@ -9,6 +9,7 @@ use crate::resources::{Resource, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
 use crate::shelter::ShelterParams;
+use crate::river::RiverParams;
 use crate::survival::NeedsParams;
 use crate::spatial::Grid;
 use crate::world::{distance, VegetationParams, World};
@@ -224,6 +225,9 @@ pub struct Config {
     pub shelter: ShelterParams,
     /// A fome e a saúde do jogador (ver `survival.rs`).
     pub needs: NeedsParams,
+    /// O rio. Só a paisagem (`Landscape`) o traça; uma simulação sozinha
+    /// não tem rio.
+    pub river: RiverParams,
     pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
@@ -248,6 +252,7 @@ impl Default for Config {
             calendar: CalendarParams::default(),
             shelter: ShelterParams::default(),
             needs: NeedsParams::default(),
+            river: RiverParams::default(),
             resources: ResourceParams::default(),
             cabin: None,
         }
@@ -877,7 +882,7 @@ impl Simulation {
         // Num mapa muito pequeno pode não haver célula longe que chegue:
         // ao fim de algumas tentativas, fica a última.
         for _ in 0..SPAWN_TRIES {
-            if far_from(self.player, cell) {
+            if far_from(self.player, cell) && !self.world.is_water(cell.0, cell.1) {
                 break;
             }
             cell = pick(&mut self.rng, w, h);

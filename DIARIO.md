@@ -33,6 +33,28 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira, à noite, mais tarde)
+
+### Um rio atravessa a paisagem 🏞️
+
+**Porquê:** o Prototype 01 pede "uma pequena floresta com rio e clareira". As clareiras já existiam; faltava o rio. É uma versão simplificada, e a pesquisa a fundo fica para depois.
+
+**O que mudou:**
+- **Um rio de 2 células de largura** vai de norte a sul, a serpentear. A cada 12 células há um **vau**, uma passagem sem água. Começa a mais de 12 células de onde o jogador aparece.
+- **A água não tem erva**, nem tocas, árvores ou pedras. As que estavam no caminho saíram.
+- **Os animais não entram no rio:** só o atravessam nos vaus. O truque está num sítio só, `World::neighbors`, que deixou de dar células de água; por isso todos os passos dos coelhos e das raposas o respeitam. Nenhum animal aparece na água, nem quando uma região longe volta a ter animais um a um.
+- **O jogador passa a vau** por todo o lado, mas não constrói nem procura comida na água.
+- **No jogo** o rio é azul-esverdeado, diferente do azul do jogador e do cheiro.
+- O formato dos ficheiros guardados passou à versão 2: um mundo guardado antes do rio dá um erro claro.
+
+**Desempenho:** igual ao de antes. A 240 horas por segundo, a simulação gasta cerca de 1,1 ms por frame e no máximo 5,5 ms, dentro dos 8 ms do orçamento.
+
+**Testes:** passam 127 no `eotw_sim` e 17 no jogo. Há 3 novos: o rio atravessa o mapa com vaus e sem buracos; sem rio ou num mapa pequeno não há água; o rio corta a paisagem sem animais nem erva, e fica igual quando a janela anda. O teste das árvores e pedras por região corre agora sem rio. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** arbustos e frutos.
+
+---
+
 ## 2026-11-11 (quarta-feira, ao fim do dia)
 
 ### O hardware-alvo e o orçamento de tempo ⏱️
