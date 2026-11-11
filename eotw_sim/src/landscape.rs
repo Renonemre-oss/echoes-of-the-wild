@@ -27,6 +27,7 @@ use crate::resources::{Craft, Inventory, Item, Resource, Tool};
 use crate::rng::Rng;
 use crate::scent::KINDS;
 use crate::shelter::{Build, Shelter, Stage};
+use crate::survival::Needs;
 use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
 use crate::world::{distance, World};
 
@@ -116,6 +117,8 @@ pub struct Landscape {
     /// O abrigo que o jogador construiu, em células da paisagem inteira.
     /// Começa sem nenhum.
     shelter: Option<Shelter>,
+    /// A fome e a saúde do jogador.
+    needs: Needs,
 }
 
 /// O resultado de uma tentativa de recolha (`Landscape::gather`).
@@ -195,6 +198,7 @@ impl Landscape {
             crossings: 0,
             inventory: Inventory::default(),
             shelter: None,
+            needs: Needs::default(),
         };
         // Sem janela ainda, todas as regiões são agregadas.
         for _ in 0..WARMUP_DAYS {
@@ -241,6 +245,10 @@ impl Landscape {
 
     pub fn inventory(&self) -> &Inventory {
         &self.inventory
+    }
+
+    pub fn needs(&self) -> &Needs {
+        &self.needs
     }
 
     pub fn shelter(&self) -> Option<&Shelter> {
@@ -323,6 +331,38 @@ impl Landscape {
             self.step();
         }
         Gather::Got { item: Item::Leaves, amount: added, broke: None }
+    }
+
+    /// Procura comida na erva onde o jogador está (ervas, raízes e
+    /// cogumelos): gasta `forage_hours` e `forage_biomass` de vegetação por
+    /// porção. Se a erva for pouca ou o inventário estiver cheio, não gasta
+    /// tempo.
+    pub fn forage(&mut self) -> Gather {
+        let p = self.config.needs.clone();
+        let carry = self.config.resources.carry;
+        let Some(here) = self.in_window(self.player) else {
+            return Gather::Nothing;
+        };
+        if self.window.sim.world.biomass_at(here.0, here.1) < p.forage_biomass {
+            return Gather::Nothing;
+        }
+        if self.inventory.add(Item::Food, 1, carry) == 0 {
+            return Gather::Full;
+        }
+        self.window.sim.world.take(here.0, here.1, p.forage_biomass);
+        for _ in 0..p.forage_hours {
+            self.step();
+        }
+        Gather::Got { item: Item::Food, amount: 1, broke: None }
+    }
+
+    /// Come uma porção de comida do inventário, se houver. Não gasta tempo.
+    pub fn eat(&mut self) -> bool {
+        if !self.inventory.remove(Item::Food, 1) {
+            return false;
+        }
+        self.needs.eat(&self.config.needs);
+        true
     }
 
     /// Constrói o abrigo ou a etapa seguinte dele (ver `shelter.rs`). O
@@ -428,6 +468,7 @@ impl Landscape {
     /// animais a mudar de região.
     pub fn step(&mut self) {
         self.window.sim.step();
+        self.needs.tick(&self.config.needs);
         if self.window.sim.tick() % TICKS_PER_DAY == 0 {
             for r in self.regions.iter_mut().flatten() {
                 r.step_day();
@@ -1033,6 +1074,32 @@ mod tests {
         let gasto = antes - l.window_sim().world.biomass_at(erva.0, erva.1);
         assert!(gasto < 2.0 * p.leaf_biomass, "gastou {gasto} de erva por uma folha");
         assert_eq!(l.gather(), Gather::Full);
+    }
+
+    /// Procurar comida na erva gasta uma hora e erva, e comer tira a fome.
+    /// Sem erva não se encontra nada e não passa tempo.
+    #[test]
+    fn procurar_comida_e_comer() {
+        let mut l = paisagem(3, 3, (36, 36));
+        let p = l.config.needs.clone();
+        let here = l.in_window(l.player()).unwrap();
+        l.window.sim.world.set_biomass(here.0, here.1, 0.0);
+        let tick = l.window_sim().tick();
+        assert_eq!(l.forage(), Gather::Nothing);
+        assert_eq!(l.window_sim().tick(), tick);
+        assert!(!l.eat(), "sem comida não se come");
+
+        l.window.sim.world.set_biomass(here.0, here.1, 2.0 * p.forage_biomass);
+        let antes = l.window_sim().world.biomass_at(here.0, here.1);
+        assert_eq!(l.forage(), Gather::Got { item: Item::Food, amount: 1, broke: None });
+        assert_eq!(l.window_sim().tick(), tick + p.forage_hours);
+        assert!(l.window_sim().world.biomass_at(here.0, here.1) < antes);
+
+        let fome = l.needs().food;
+        assert!(fome < Needs::default().food, "a fome desce com as horas");
+        assert!(l.eat());
+        assert_eq!(l.needs().food, (fome + p.meal).min(100.0));
+        assert_eq!(l.inventory().count(Item::Food), 0);
     }
 
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a

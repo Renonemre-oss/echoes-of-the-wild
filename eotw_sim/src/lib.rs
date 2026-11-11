@@ -22,6 +22,7 @@ pub mod scent;
 pub mod spatial;
 pub mod shelter;
 pub mod sim;
+pub mod survival;
 pub mod sweep;
 pub mod world;
 
@@ -34,4 +35,5 @@ pub use rng::Rng;
 pub use scent::{Scent, ScentParams};
 pub use shelter::{Build, Shelter, ShelterParams, Stage};
 pub use sim::{CabinLog, CabinParams, Config, DayStats, MigrationParams, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
+pub use survival::{Needs, NeedsParams};
 pub use world::{VegetationParams, World};

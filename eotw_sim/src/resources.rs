@@ -19,6 +19,9 @@ pub enum Item {
     /// Folhas e erva seca, para cobrir o abrigo e fazer a cama. Recolhem-se
     /// da erva, onde não há árvore nem pedra.
     Leaves,
+    /// Ervas, raízes e cogumelos que se comem (ver `survival.rs`). Procuram-se
+    /// na erva, com a tecla F.
+    Food,
 }
 
 impl Item {
@@ -27,6 +30,7 @@ impl Item {
             Item::Wood => "madeira",
             Item::Stone => "pedra",
             Item::Leaves => "folhas",
+            Item::Food => "comida",
         }
     }
 }
@@ -70,7 +74,7 @@ impl Tool {
         match item {
             Item::Wood => Some(Tool::Axe),
             Item::Stone => Some(Tool::Pickaxe),
-            Item::Leaves => None,
+            Item::Leaves | Item::Food => None,
         }
     }
 }

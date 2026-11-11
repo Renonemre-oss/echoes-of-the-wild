@@ -449,6 +449,28 @@ fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: R
         let hours = world.0.window_sim().config().shelter.hours;
         note.0 = build_note(world.0.build(), hours);
     }
+    if keys.just_pressed(KeyCode::KeyF) {
+        note.0 = forage_note(world.0.forage());
+    }
+    if keys.just_pressed(KeyCode::KeyC) {
+        note.0 = if world.0.eat() { "Comeste uma porção.".into() } else { "Não tens comida: procura-a na erva com F.".into() };
+    }
+}
+
+/// A frase do painel para o resultado de procurar comida.
+fn forage_note(result: Gather) -> String {
+    match result {
+        Gather::Got { .. } => "Encontraste comida: ervas, raízes e cogumelos (1 hora). C: comer.".into(),
+        Gather::Full => "O inventário está cheio.".into(),
+        _ => "Aqui há pouca erva para encontrar comida.".into(),
+    }
+}
+
+/// A fome e a saúde, para o painel.
+fn needs_line(land: &Landscape) -> String {
+    let n = land.needs();
+    let faints = if n.faints > 0 { format!(" (desmaiaste {} vezes)", n.faints) } else { String::new() };
+    format!("Fome: {:.0} de 100, {}\nSaúde: {:.0} de 100{faints}", n.food, n.hunger_word(), n.health)
 }
 
 /// A frase do painel para o resultado de uma construção.
@@ -515,7 +537,13 @@ fn gather_note(result: Gather) -> String {
 }
 
 /// Corre os ticks que couberem no tempo real que passou.
-fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>, mut perf: ResMut<Perf>) {
+fn advance(
+    time: Res<Time>,
+    mut clock: ResMut<Clock>,
+    mut world: ResMut<World>,
+    mut perf: ResMut<Perf>,
+    mut note: ResMut<GatherNote>,
+) {
     let start = std::time::Instant::now();
     if clock.paused {
         perf.sim_ms = 0.0;
@@ -525,8 +553,12 @@ fn advance(time: Res<Time>, mut clock: ResMut<Clock>, mut world: ResMut<World>, 
     // Um limite por frame, para um frame lento não congelar a janela.
     let ticks = (clock.pending as u32).min(240);
     clock.pending -= ticks as f32;
+    let faints = world.0.needs().faints;
     for _ in 0..ticks {
         world.0.step();
+    }
+    if world.0.needs().faints > faints {
+        note.0 = "Desmaiaste de fome. Acordas fraco: procura comida (F) e come (C).".into();
     }
     perf.sim_ms = start.elapsed().as_secs_f32() * 1000.0;
 }
@@ -728,8 +760,8 @@ fn draw_panel(
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
          No mundo: {} coelhos, {} raposas\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
-         {}\n{}{}\n\n\
-         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
+         {}\n{}\n{}{}\n\n\
+         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\nF: procurar comida na erva (1 hora)\nC: comer\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
          Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
          verde escuro: árvore (abrigo)\n  cinzento: pedra\n  \
          verde a castanho: muita a pouca erva{}",
@@ -750,6 +782,7 @@ fn draw_panel(
         totals.1,
         sim.world.mean_biomass(),
         sim.world.capacity(),
+        needs_line(land),
         inventory_line(land),
         shelter_line(land),
         if note.0.is_empty() { String::new() } else { format!("\n{}", note.0) },
@@ -928,6 +961,34 @@ mod tests {
         app.update();
         assert!(app.world().resource::<GatherNote>().0.starts_with("Para um machado falta"));
         assert!(inventory_line(&app.world().resource::<World>().0).starts_with("Inventário (1 de 20)"));
+    }
+
+    /// F procura comida na erva e C come-a; o painel mostra a fome.
+    #[test]
+    fn as_teclas_f_e_c_dao_de_comer() {
+        let land = paisagem((12, 12));
+        let (ox, oy) = land.window_origin();
+        let p = land.player();
+        let fome = land.needs().food;
+        let w = land.window_sim().world.biomass_at(p.0 - ox, p.1 - oy);
+        assert!(w >= land.window_sim().config().needs.forage_biomass, "o jogador começa na erva");
+        let mut app = App::new();
+        let mut input = ButtonInput::<KeyCode>::default();
+        input.press(KeyCode::KeyF);
+        app.insert_resource(input)
+            .insert_resource(World(land))
+            .init_resource::<GatherNote>()
+            .add_systems(Update, gather);
+        app.update();
+        assert!(app.world().resource::<GatherNote>().0.starts_with("Encontraste comida"));
+        let mut input = ButtonInput::<KeyCode>::default();
+        input.press(KeyCode::KeyC);
+        app.insert_resource(input);
+        app.update();
+        assert_eq!(app.world().resource::<GatherNote>().0, "Comeste uma porção.");
+        let land = &app.world().resource::<World>().0;
+        assert!(land.needs().food > fome);
+        assert!(needs_line(land).starts_with("Fome: "));
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::resources::{Resource, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
 use crate::shelter::ShelterParams;
+use crate::survival::NeedsParams;
 use crate::spatial::Grid;
 use crate::world::{distance, VegetationParams, World};
 
@@ -220,6 +221,8 @@ pub struct Config {
     pub daylight: DaylightParams,
     pub calendar: CalendarParams,
     pub shelter: ShelterParams,
+    /// A fome e a saúde do jogador (ver `survival.rs`).
+    pub needs: NeedsParams,
     pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
@@ -243,6 +246,7 @@ impl Default for Config {
             daylight: DaylightParams::default(),
             calendar: CalendarParams::default(),
             shelter: ShelterParams::default(),
+            needs: NeedsParams::default(),
             resources: ResourceParams::default(),
             cabin: None,
         }

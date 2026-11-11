@@ -693,6 +693,8 @@ Os sistemas fundamentais são:
 
 A fome, sede ou temperatura não devem obrigar o jogador a interromper a atividade de poucos em poucos minutos. A sobrevivência deve gerar decisões, não tarefas repetitivas.
 
+**No Prototype 01 (versão simplificada, ainda sem pesquisa):** o jogador tem fome e saúde, de 0 a 100 (`survival.rs`). A saciedade desce 1,4 por hora: cheio, só fica sem comida ao fim de três dias. Com a saciedade a 0 perde 2 de saúde por hora; acima de 30 recupera 1 por hora. A comida (ervas, raízes e cogumelos) procura-se na erva com F: 1 hora e 3 de vegetação por porção, por isso o jogador compete com os coelhos. C come uma porção (+25). Com a saúde a 0 o jogador desmaia e acorda com 25 de saúde e de saciedade: ainda não há morte. Os números são decisões de jogo, a rever com pesquisa (necessidades reais, alimentos silvestres por estação, caça).
+
 ## 9.4. Combate
 
 **Decisão (v0.5):** combate de peso médio, com armas variadas e técnica. Direção:

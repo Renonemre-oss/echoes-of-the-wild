@@ -33,6 +33,24 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira, à tarde)
+
+### O jogador tem fome e saúde 🍄
+
+**Porquê:** o passo seguinte do GDD era a sobrevivência do Prototype 01 ("Saúde e alimentação simples", 18.2). Pediste uma versão simplificada; a pesquisa a fundo fica para depois.
+
+**O que mudou:**
+- **Fome e saúde, de 0 a 100.** A fome desce 1,4 por hora: cheio, aguentas três dias. Sem comida perdes 2 de saúde por hora; bem alimentado recuperas 1 por hora.
+- **F: procurar comida na erva** (ervas, raízes e cogumelos). Gasta 1 hora e 3 de vegetação, por isso tiras comida aos coelhos. **C: comer** uma porção (+25). Por dia chega cerca de uma hora e meia de procura.
+- **Desmaiar:** com a saúde a 0 desmaias e acordas com 25 de saúde e de fome. Ainda não há morte.
+- O painel mostra a fome e a saúde, e avisa quando desmaias.
+
+**Testes:** passam 121 no `eotw_sim` e 16 no jogo, com 5 novos. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** continuar o GDD pela ordem do plano.
+
+---
+
 ## 2026-11-11 (quarta-feira)
 
 ### Revisão do código e correção de bugs 🐛
