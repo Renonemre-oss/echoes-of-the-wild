@@ -29,6 +29,8 @@ use crate::rng::Rng;
 use crate::scent::KINDS;
 use crate::shelter::{Build, Shelter, Stage};
 use crate::survival::Needs;
+use crate::ungulates::{Ground, Herd, Species};
+use crate::wolves::{Pack, PackEvent};
 use crate::sim::{CabinParams, Config, Simulation, MIN_REGION_SIZE, SPAWN_CLEAR_RADIUS, TICKS_PER_DAY};
 use crate::world::{distance, World};
 
@@ -65,6 +67,7 @@ const STREAM_REGION: u64 = 12;
 const STREAM_WINDOW: u64 = 13;
 const STREAM_CROSSING: u64 = 14;
 const STREAM_RIVER: u64 = 15;
+const STREAM_WILD: u64 = 16;
 
 /// O que existe numa região cortada da janela: o terreno, o cheiro e os
 /// animais, em coordenadas da região (0 a 23).
@@ -123,11 +126,65 @@ pub struct Landscape {
     shelter: Option<Shelter>,
     /// A fome e a saúde do jogador.
     needs: Needs,
+    /// Os grupos de veados e de javalis, em células da paisagem inteira.
+    pub herds: Vec<Herd>,
+    /// A alcateia, quando está a atravessar a paisagem.
+    pub pack: Option<Pack>,
+    /// Quantas vezes a alcateia entrou e quantas presas matou cá dentro.
+    pub wolf_visits: usize,
+    pub wolf_kills: usize,
+    /// Números ao acaso dos veados, javalis e lobos.
+    wild_rng: Rng,
+}
+
+impl Ground for Landscape {
+    fn size(&self) -> (usize, usize) {
+        Landscape::size(self)
+    }
+
+    fn is_water(&self, cell: (usize, usize)) -> bool {
+        Landscape::is_water(self, cell)
+    }
+
+    /// Na janela tira da célula; longe, tira da erva média da região.
+    fn take_grass(&mut self, cell: (usize, usize), amount: f32) -> f32 {
+        if let Some((x, y)) = self.in_window(cell) {
+            return self.window.sim.world.take(x, y, amount);
+        }
+        let (id, _) = self.region_cell(cell);
+        let Some(r) = self.regions[id].as_mut() else {
+            return 0.0;
+        };
+        let taken = amount.min(r.biomass);
+        r.biomass -= taken / r.cells.max(1) as f32;
+        taken
+    }
+
+    fn nearest_fruit(&self, from: (usize, usize), radius: usize) -> Option<(usize, usize)> {
+        self.bushes()
+            .filter(|&(c, f)| f >= 1.0 && distance(c, from) <= radius)
+            .min_by_key(|&(c, _)| distance(c, from))
+            .map(|(c, _)| c)
+    }
+
+    fn take_fruit(&mut self, cell: (usize, usize)) -> f32 {
+        if let Some((x, y)) = self.in_window(cell) {
+            return self.window.sim.world.take_resource(x, y, f32::MAX);
+        }
+        let (id, (lx, ly)) = self.region_cell(cell);
+        let Some(r) = self.regions[id].as_mut() else {
+            return 0.0;
+        };
+        match r.resources.iter_mut().find(|r| (r.x, r.y) == (lx, ly)) {
+            Some(b) => std::mem::take(&mut b.amount),
+            None => 0.0,
+        }
+    }
 }
 
 /// A versão do formato dos ficheiros guardados. Sobe quando o que se guarda
 /// muda, para um ficheiro antigo dar um erro claro em vez de carregar mal.
-pub const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION: u32 = 5;
 
 #[derive(Serialize)]
 struct SaveRef<'a> {
@@ -200,6 +257,7 @@ impl Landscape {
             region.cells = REGION * REGION - region.water.len();
         }
         let rng = Rng::derived(&[config.seed, STREAM_CROSSING]);
+        let wild_rng = Rng::derived(&[config.seed, STREAM_WILD]);
         // Uma janela vazia, só para a estrutura existir; `open_window` faz a verdadeira.
         let empty = Window {
             rx: 0,
@@ -231,6 +289,11 @@ impl Landscape {
             inventory: Inventory::default(),
             shelter: None,
             needs: Needs::default(),
+            herds: Vec::new(),
+            pack: None,
+            wolf_visits: 0,
+            wolf_kills: 0,
+            wild_rng,
         };
         // Sem janela ainda, todas as regiões são agregadas.
         for _ in 0..WARMUP_DAYS {
@@ -241,7 +304,174 @@ impl Landscape {
         }
         landscape.crossings = 0;
         landscape.open_window();
+        for species in [Species::Deer, Species::Boar] {
+            while landscape.animals(species) < landscape.target(species) {
+                let cell = landscape.random_land_cell(false);
+                let p = landscape.ungulate(species).clone();
+                let herd = Herd::new(species, cell, &p, &mut landscape.wild_rng);
+                landscape.herds.push(herd);
+            }
+        }
         landscape
+    }
+
+    pub fn ungulate(&self, species: Species) -> &crate::ungulates::UngulateParams {
+        match species {
+            Species::Deer => &self.config.deer,
+            Species::Boar => &self.config.boar,
+        }
+    }
+
+    /// Quantos animais desta espécie há na paisagem.
+    pub fn animals(&self, species: Species) -> usize {
+        self.herds.iter().filter(|h| h.species == species).map(|h| h.members.len()).sum()
+    }
+
+    /// A área da paisagem: 1 célula = 10 m, 10⁴ células por km².
+    fn km2(&self) -> f32 {
+        (self.cols * REGION * self.rows * REGION) as f32 / 10_000.0
+    }
+
+    /// Quantos haveria à densidade real.
+    fn target(&self, species: Species) -> usize {
+        (self.ungulate(species).density_km2 * self.km2()).round() as usize
+    }
+
+    /// Uma célula de terra ao acaso, longe do jogador; `edge` põe-na numa borda.
+    fn random_land_cell(&mut self, edge: bool) -> (usize, usize) {
+        let (w, h) = self.size();
+        let mut cell = (0, 0);
+        for _ in 0..100 {
+            let rng = &mut self.wild_rng;
+            cell = if edge {
+                match rng.range_usize(4) {
+                    0 => (rng.range_usize(w), 0),
+                    1 => (rng.range_usize(w), h - 1),
+                    2 => (0, rng.range_usize(h)),
+                    _ => (w - 1, rng.range_usize(h)),
+                }
+            } else {
+                (rng.range_usize(w), rng.range_usize(h))
+            };
+            if !self.is_water(cell) && distance(cell, self.player) > SPAWN_CLEAR_RADIUS {
+                break;
+            }
+        }
+        cell
+    }
+
+    /// Uma hora dos veados, dos javalis e da alcateia. No fim de cada dia,
+    /// envelhecem, nascem crias, uns grupos saem e outros entram.
+    fn step_wild(&mut self) {
+        let light = self.window.sim.light();
+        let date = self.window.sim.date();
+        let fruiting = self.config.calendar.fruiting(date.month);
+        let noise = self.window.sim.noise.unwrap_or(0);
+        let player = self.player;
+        let mut herds = std::mem::take(&mut self.herds);
+        let mut rng = std::mem::replace(&mut self.wild_rng, Rng::new(0));
+        for herd in &mut herds {
+            let p = self.ungulate(herd.species).clone();
+            herd.act(self, &p, &mut rng, player, noise, light, fruiting);
+        }
+
+        // A alcateia: de noite, às vezes, entra por uma borda.
+        let wp = self.config.wolves.clone();
+        if self.pack.is_none() && light < 0.2 && rng.next_f32() < wp.visits_per_day / wp.night_hours {
+            self.pack = Some(Pack::arrive(&wp, self.size(), &mut rng));
+            self.wolf_visits += 1;
+        }
+        if let Some(mut pack) = self.pack.take() {
+            let ungulates = (&self.config.deer, &self.config.boar);
+            let events = pack.act(&mut herds, &wp, ungulates, &mut rng, player, self.size());
+            let mut gone = false;
+            for e in events {
+                match e {
+                    PackEvent::Kill { species, young } => {
+                        self.wolf_kills += 1;
+                        let who = match (species, young) {
+                            (Species::Deer, true) => "uma cria de veado",
+                            (Species::Deer, false) => "um veado",
+                            (Species::Boar, true) => "um leitão",
+                            (Species::Boar, false) => "um javali",
+                        };
+                        self.events.push(format!("Dia {}: uma alcateia matou {who}.", self.day()));
+                    }
+                    PackEvent::LeftCarcass { cell, kg } => {
+                        if let Some((x, y)) = self.in_window(cell) {
+                            self.window.sim.world.add_carcass(x, y, kg);
+                        }
+                    }
+                    PackEvent::Gone => gone = true,
+                }
+            }
+            if !gone {
+                self.pack = Some(pack);
+            }
+        }
+
+        if self.window.sim.tick() % TICKS_PER_DAY == 0 {
+            let first = date.day == 1;
+            let km2 = self.km2();
+            let count = |s: Species| herds.iter().filter(|h| h.species == s).map(|h| h.members.len()).sum::<usize>();
+            let crowding = |s: Species, n: usize| n as f32 / (self.ungulate(s).capacity_km2 * km2);
+            let crowded = [crowding(Species::Deer, count(Species::Deer)), crowding(Species::Boar, count(Species::Boar))];
+            for herd in &mut herds {
+                let p = self.ungulate(herd.species).clone();
+                let c = crowded[(herd.species == Species::Boar) as usize];
+                herd.day(&p, &mut rng, date.month, first, c);
+                if rng.next_f32() < p.leave_per_day {
+                    herd.members.clear();
+                }
+            }
+        }
+        herds.retain(|h| !h.members.is_empty());
+        self.herds = herds;
+        self.wild_rng = rng;
+
+        // Entra um grupo novo pela borda por dia, enquanto houver menos do que
+        // à densidade real.
+        if self.window.sim.tick() % TICKS_PER_DAY == 0 {
+            for species in [Species::Deer, Species::Boar] {
+                if self.animals(species) < self.target(species) {
+                    let cell = self.random_land_cell(true);
+                    let p = self.ungulate(species).clone();
+                    let herd = Herd::new(species, cell, &p, &mut self.wild_rng);
+                    self.herds.push(herd);
+                }
+            }
+        }
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (self.cols * REGION, self.rows * REGION)
+    }
+
+    /// A região agregada e a célula dentro dela, para uma célula fora da janela.
+    fn region_cell(&self, (x, y): (usize, usize)) -> (usize, (usize, usize)) {
+        ((y / REGION) * self.cols + x / REGION, (x % REGION, y % REGION))
+    }
+
+    fn is_water(&self, cell: (usize, usize)) -> bool {
+        match self.in_window(cell) {
+            Some((x, y)) => self.window.sim.world.is_water(x, y),
+            None => {
+                let (id, local) = self.region_cell(cell);
+                self.regions[id].as_ref().is_some_and(|r| r.water.contains(&local))
+            }
+        }
+    }
+
+    /// Os arbustos com frutos, em células da paisagem.
+    fn bushes(&self) -> impl Iterator<Item = ((usize, usize), f32)> + '_ {
+        let (ox, oy) = self.window_origin();
+        let bush = |r: &&Resource| r.kind == crate::resources::ResourceKind::Bush;
+        let window = self.window.sim.world.resources().iter().filter(bush).map(move |r| ((ox + r.x, oy + r.y), r.amount));
+        let far = self.regions.iter().enumerate().flat_map(move |(id, r)| {
+            let (rx, ry) = ((id % self.cols) * REGION, (id / self.cols) * REGION);
+            r.iter().flat_map(|r| r.resources.iter()).filter(bush).map(move |r| ((rx + r.x, ry + r.y), r.amount))
+        });
+        window.chain(far)
     }
 
     /// A simulação completa da janela (para desenhar).
@@ -332,7 +562,11 @@ impl Landscape {
         let (item, cell) = (r.kind.item(), (r.x, r.y));
         let tool = Tool::for_item(item).filter(|&t| self.inventory.tool(t).is_some());
         let with_tool = tool.is_some();
-        let want = if with_tool { p.tool_amount } else { p.gather_amount };
+        let want = match item {
+            Item::Fruit => p.fruit_per_gather,
+            _ if with_tool => p.tool_amount,
+            _ => p.gather_amount,
+        };
         // O que o recurso ainda tem e o que cabe no inventário.
         let space = p.carry.saturating_sub(self.inventory.total());
         let amount = (want.min(r.amount).floor() as u32).min(space);
@@ -342,9 +576,12 @@ impl Landscape {
         self.inventory.add(item, amount, p.carry);
         self.window.sim.world.take_resource(cell.0, cell.1, amount as f32);
         let broke = tool.filter(|&t| self.inventory.wear(t));
-        for _ in 0..p.gather_hours {
-            self.step();
-        }
+        let noise = match item {
+            Item::Wood => self.config.noise.chop,
+            Item::Stone => self.config.noise.mine,
+            _ => 0,
+        };
+        self.work(p.gather_hours, noise);
         Gather::Got { item, amount, broke }
     }
 
@@ -355,9 +592,7 @@ impl Landscape {
         let p = self.config.resources.clone();
         let result = self.inventory.craft(tool, p.tool_uses);
         if result == Craft::Made {
-            for _ in 0..p.craft_hours {
-                self.step();
-            }
+            self.work(p.craft_hours, self.config.noise.craft);
         }
         result
     }
@@ -409,13 +644,17 @@ impl Landscape {
         Gather::Got { item: Item::Food, amount: 1, broke: None }
     }
 
-    /// Come uma porção de comida do inventário, se houver. Não gasta tempo.
-    pub fn eat(&mut self) -> bool {
-        if !self.inventory.remove(Item::Food, 1) {
-            return false;
+    /// Come um fruto ou, se não houver, uma porção de comida do inventário.
+    /// Devolve o que comeu. Não gasta tempo.
+    pub fn eat(&mut self) -> Option<Item> {
+        let p = &self.config.needs;
+        for (item, value) in [(Item::Fruit, p.fruit_meal), (Item::Food, p.meal)] {
+            if self.inventory.remove(item, 1) {
+                self.needs.eat(value);
+                return Some(item);
+            }
         }
-        self.needs.eat(&self.config.needs);
-        true
+        None
     }
 
     /// Constrói o abrigo ou a etapa seguinte dele (ver `shelter.rs`). O
@@ -461,9 +700,7 @@ impl Landscape {
         let (x, y) = self.player;
         self.shelter = Some(Shelter { x, y, stage });
         self.place_player_in_window();
-        for _ in 0..p.hours_of(stage) {
-            self.step();
-        }
+        self.work(p.hours_of(stage), self.config.noise.build);
         Build::Built(stage)
     }
 
@@ -491,6 +728,19 @@ impl Landscape {
     }
 
     /// Coelhos e raposas na paisagem inteira.
+    /// A vegetação média de toda a paisagem (terra só), da janela e das
+    /// regiões agregadas.
+    pub fn mean_biomass(&self) -> f32 {
+        let w = &self.window.sim.world;
+        let mut sum = w.mean_biomass() * w.land_cells() as f32;
+        let mut cells = w.land_cells();
+        for r in self.regions.iter().flatten() {
+            sum += r.biomass * r.cells as f32;
+            cells += r.cells;
+        }
+        sum / cells.max(1) as f32
+    }
+
     pub fn totals(&self) -> (usize, usize) {
         let mut total = (self.window.sim.rabbits.len(), self.window.sim.foxes.len());
         for r in self.regions.iter().flatten() {
@@ -525,12 +775,23 @@ impl Landscape {
     pub fn step(&mut self) {
         self.window.sim.step();
         self.needs.tick(&self.config.needs);
+        self.step_wild();
         if self.window.sim.tick() % TICKS_PER_DAY == 0 {
             for r in self.regions.iter_mut().flatten() {
                 r.step_day();
             }
             self.cross_borders();
         }
+    }
+
+    /// `hours` de trabalho, a fazer barulho que se ouve até `noise` células
+    /// (0 é silencioso; ver `noise.rs`).
+    fn work(&mut self, hours: u64, noise: usize) {
+        self.window.sim.noise = (noise > 0).then_some(noise);
+        for _ in 0..hours {
+            self.step();
+        }
+        self.window.sim.noise = None;
     }
 
     pub fn run_days(&mut self, days: u64) {
@@ -653,6 +914,9 @@ impl Landscape {
                 for (x, y) in cut.world.water_cells() {
                     world.add_water(ox + x, oy + y);
                 }
+                for &(x, y, kg) in cut.world.carcasses() {
+                    world.add_carcass(ox + x, oy + y, kg);
+                }
                 for r in cut.world.resources() {
                     world.add_resource(Resource { x: ox + r.x, y: oy + r.y, ..r.clone() });
                 }
@@ -712,6 +976,9 @@ impl Landscape {
                     world.add_water(x, y);
                 }
             }
+        }
+        for &(x, y, kg) in sim.world.carcasses().iter().filter(|c| inside(c.0, c.1)) {
+            world.add_carcass(x - x0, y - y0, kg);
         }
         let rabbits = sim
             .rabbits
@@ -1144,6 +1411,104 @@ mod tests {
         assert_eq!(l.gather(), Gather::Full);
     }
 
+    /// Os arbustos só têm frutos de julho a outubro. Na época, apanhar dá 3
+    /// frutos de uma vez, e comer come os frutos primeiro. Sem javalis, que
+    /// também os comem (ver `os_javalis_comem_os_frutos`).
+    #[test]
+    fn os_frutos_apanham_se_na_epoca() {
+        let mut config = Config { seed: 2, ..Config::default() };
+        config.boar.density_km2 = 0.0;
+        let mut l = Landscape::new(config, 3, 3, (36, 36));
+        let arbustos = |l: &Landscape| -> Vec<f32> {
+            let w = &l.window_sim().world;
+            w.resources().iter().filter(|r| r.kind == ResourceKind::Bush).map(|r| r.amount).collect()
+        };
+        assert!(!arbustos(&l).is_empty());
+        while l.window_sim().date().month != 0 {
+            l.run_days(1);
+        }
+        assert!(arbustos(&l).iter().all(|&f| f == 0.0), "em janeiro não há frutos");
+
+        while l.window_sim().date().month != 7 {
+            l.run_days(1);
+        }
+        assert!(arbustos(&l).iter().all(|&f| f > 0.0), "em agosto há frutos");
+        let (ox, oy) = l.window_origin();
+        let w = &l.window_sim().world;
+        let alvo = w
+            .resources()
+            .iter()
+            .filter(|r| r.kind == ResourceKind::Bush)
+            .flat_map(|r| w.neighbors(r.x, r.y).into_iter().flatten())
+            .find(|&(x, y)| {
+                let perto = std::iter::once((x, y)).chain(w.neighbors(x, y).into_iter().flatten());
+                perto.filter(|&(a, b)| w.resource_at(a, b).is_some()).count() == 1
+            })
+            .map(|(x, y)| (ox + x, oy + y))
+            .expect("um sítio ao lado de um arbusto, sem mais nada");
+        ir_para(&mut l, alvo);
+        let p = l.config.resources.clone();
+        assert_eq!(l.gather(), Gather::Got { item: Item::Fruit, amount: p.fruit_per_gather as u32, broke: None });
+        dar(&mut l, Item::Food, 1);
+        let fome = l.needs().food;
+        assert_eq!(l.eat(), Some(Item::Fruit));
+        assert_eq!(l.needs().food, (fome + l.config.needs.fruit_meal).min(100.0));
+
+        while l.window_sim().date().month != 0 {
+            l.run_days(1);
+        }
+        assert!(arbustos(&l).iter().all(|&f| f == 0.0), "em janeiro já caíram");
+    }
+
+    /// GDD 18.2: veados e javalis à densidade real (≈10 e 2,75 por km²):
+    /// numa paisagem de 5x5 regiões (1,44 km²), uns 14 veados e 4 javalis.
+    /// Entram e saem pelas bordas, mas ficam perto da densidade real, e nunca
+    /// estão na água.
+    #[test]
+    fn veados_e_javalis_a_densidade_real() {
+        let mut l = paisagem(1, 5, (60, 60));
+        assert_eq!((l.target(Species::Deer), l.target(Species::Boar)), (14, 4));
+        let (mut veados, mut javalis, mut dias) = (0, 0, 0);
+        for _ in 0..60 {
+            l.run_days(1);
+            dias += 1;
+            veados += l.animals(Species::Deer);
+            javalis += l.animals(Species::Boar);
+            assert!(l.herds.iter().all(|h| !l.is_water(h.cell())));
+        }
+        let (v, j) = (veados as f32 / dias as f32, javalis as f32 / dias as f32);
+        assert!((10.0..=18.0).contains(&v), "veados: {v}");
+        assert!((3.0..=8.0).contains(&j), "javalis: {j}");
+    }
+
+    /// Na época, os javalis vão aos arbustos e comem os frutos: competem com
+    /// o jogador pela única comida silvestre que ele tem.
+    #[test]
+    fn os_javalis_comem_os_frutos() {
+        let frutos = |boar: f32| {
+            let mut config = Config { seed: 4, ..Config::default() };
+            config.boar.density_km2 = boar;
+            let mut l = Landscape::new(config, 5, 5, (60, 60));
+            while l.window_sim().date().month != 8 {
+                l.run_days(1);
+            }
+            l.bushes().map(|(_, f)| f).sum::<f32>()
+        };
+        let (sem, com) = (frutos(0.0), frutos(10.0));
+        assert!(com < 0.9 * sem, "frutos em setembro: {com} com javalis, {sem} sem");
+    }
+
+    /// Com a frequência de visita real, a alcateia entra umas 3–4 vezes por
+    /// ano de jogo (36 dias) e quase nunca mata cá dentro: é a escala real.
+    #[test]
+    fn a_alcateia_passa_raramente() {
+        let mut l = paisagem(1, 5, (60, 60));
+        l.run_days(360);
+        let (visitas, mortes) = (l.wolf_visits, l.wolf_kills);
+        assert!((15..=60).contains(&visitas), "{visitas} visitas em 10 anos de jogo");
+        assert!(mortes <= visitas, "{mortes} presas em {visitas} visitas");
+    }
+
     /// Procurar comida na erva gasta uma hora e erva, e comer tira a fome.
     /// Sem erva não se encontra nada e não passa tempo.
     #[test]
@@ -1155,7 +1520,7 @@ mod tests {
         let tick = l.window_sim().tick();
         assert_eq!(l.forage(), Gather::Nothing);
         assert_eq!(l.window_sim().tick(), tick);
-        assert!(!l.eat(), "sem comida não se come");
+        assert_eq!(l.eat(), None, "sem comida não se come");
 
         l.window.sim.world.set_biomass(here.0, here.1, 2.0 * p.forage_biomass);
         let antes = l.window_sim().world.biomass_at(here.0, here.1);
@@ -1165,7 +1530,7 @@ mod tests {
 
         let fome = l.needs().food;
         assert!(fome < Needs::default().food, "a fome desce com as horas");
-        assert!(l.eat());
+        assert_eq!(l.eat(), Some(Item::Food));
         assert_eq!(l.needs().food, (fome + p.meal).min(100.0));
         assert_eq!(l.inventory().count(Item::Food), 0);
     }
@@ -1319,7 +1684,7 @@ mod tests {
         assert!(media(&l) < 0.8 * media(&controlo), "erva na volta: {} contra {}", media(&l), media(&controlo));
     }
 
-    /// As árvores e as pedras são terreno: não se perdem nem mudam quando a
+    /// As árvores, as pedras e os arbustos são terreno: não se perdem nem mudam quando a
     /// janela se desloca, e há as mesmas em cada região. Sem rio, que tira
     /// as que estão no caminho (ver `o_rio_corta_a_paisagem`).
     #[test]
@@ -1332,7 +1697,7 @@ mod tests {
         let mut l = Landscape::new(config, 4, 4, (47, 36));
         let antes = recursos(&l);
         let p = ResourceParams::default();
-        assert_eq!(antes.len(), 16 * (p.trees + p.rocks));
+        assert_eq!(antes.len(), 16 * (p.trees + p.rocks + p.bushes));
         for _ in 0..=HYSTERESIS {
             l.move_player(1, 0);
         }

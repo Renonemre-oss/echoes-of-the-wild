@@ -262,6 +262,12 @@ impl CalendarParams {
         }
     }
 
+    /// Os arbustos têm frutos de julho a outubro no norte (amoras, sabugueiro,
+    /// pilritos). Simplificado, sem pesquisa ainda.
+    pub fn fruiting(&self, month: usize) -> bool {
+        (6..=9).contains(&self.northern(month))
+    }
+
     pub fn rabbit_breeding(&self, month: usize) -> Breeding {
         self.climate.rabbit_breeding[self.northern(month)]
     }

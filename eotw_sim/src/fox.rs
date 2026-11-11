@@ -109,6 +109,10 @@ pub struct FoxParams {
     pub energy_per_mouse: f32,
     /// Quantos restos de comida come por tick, e quanta energia dá cada unidade.
     pub scrap_bite: f32,
+    /// Carne que come de uma carcaça do lobo por hora, e a energia por kg.
+    /// Um coelho de ≈1,5 kg dá `energy_per_rabbit` (45), por isso ≈30 por kg.
+    pub carrion_bite: f32,
+    pub energy_per_carrion: f32,
     /// Este valor decide o que os restos são para a raposa. Se forem nutritivos,
     /// a raposa enche-se na cabana, deixa de caçar e há *menos* caçadas junto à
     /// cabana do que sem comida (alimentação de diversão): com 10, 14 caçadas
@@ -166,6 +170,8 @@ impl Default for FoxParams {
             mouse_cover: 0.67,
             energy_per_mouse: 4.0,
             scrap_bite: 2.0,
+            carrion_bite: 0.3,
+            energy_per_carrion: 30.0,
             energy_per_scrap: 0.5,
             satiety_ticks: 24,
             territory_radius: 9,
@@ -271,6 +277,11 @@ impl Fox {
             let eaten = world.take_scraps(self.x, self.y, p.scrap_bite);
             self.energy += p.metabolism - p.rest_metabolism;
             self.energy = (self.energy + eaten * p.energy_per_scrap).min(p.energy_max);
+        } else if self.energy < p.full_energy && world.carcass_at(self.x, self.y) > 0.0 {
+            // Uma carcaça deixada pelo lobo: carne a sério, não um petisco.
+            let eaten = world.take_carcass(self.x, self.y, p.carrion_bite);
+            self.energy += p.metabolism - p.rest_metabolism;
+            self.energy = (self.energy + eaten * p.energy_per_carrion).min(p.energy_max);
         } else if let Some(next) = hungry
             .then(|| sniff(world, rng, Scent::Food, (self.x, self.y), p.scavenge_smell_min))
             .flatten()

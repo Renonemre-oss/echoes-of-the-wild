@@ -23,6 +23,8 @@ pub enum Item {
     /// Ervas, raízes e cogumelos que se comem (ver `survival.rs`). Procuram-se
     /// na erva, com a tecla F.
     Food,
+    /// Frutos silvestres (amoras, sabugueiro, pilritos), dos arbustos.
+    Fruit,
 }
 
 impl Item {
@@ -32,6 +34,7 @@ impl Item {
             Item::Stone => "pedra",
             Item::Leaves => "folhas",
             Item::Food => "comida",
+            Item::Fruit => "frutos",
         }
     }
 }
@@ -75,7 +78,7 @@ impl Tool {
         match item {
             Item::Wood => Some(Tool::Axe),
             Item::Stone => Some(Tool::Pickaxe),
-            Item::Leaves | Item::Food => None,
+            Item::Leaves | Item::Food | Item::Fruit => None,
         }
     }
 }
@@ -85,6 +88,8 @@ impl Tool {
 pub enum ResourceKind {
     Tree,
     Rock,
+    /// Um arbusto de frutos silvestres. `amount` são os frutos que tem.
+    Bush,
 }
 
 impl ResourceKind {
@@ -93,6 +98,7 @@ impl ResourceKind {
         match self {
             ResourceKind::Tree => Item::Wood,
             ResourceKind::Rock => Item::Stone,
+            ResourceKind::Bush => Item::Fruit,
         }
     }
 }
@@ -135,6 +141,16 @@ pub struct ResourceParams {
     pub tool_uses: u32,
     /// Horas de jogo que fazer uma ferramenta gasta.
     pub craft_hours: u64,
+    /// Arbustos em cada mapa de 24x24, e quantos frutos cabem num.
+    pub bushes: usize,
+    pub bush_fruit: f32,
+    /// Frutos que um arbusto ganha por dia na época (ver
+    /// `CalendarParams::fruiting`), e perde por dia fora dela, quando caem
+    /// e apodrecem.
+    pub fruit_regrowth: f32,
+    /// Frutos apanhados de uma vez: um arbusto carregado dá mais por hora do
+    /// que procurar na erva.
+    pub fruit_per_gather: f32,
 }
 
 impl Default for ResourceParams {
@@ -152,6 +168,10 @@ impl Default for ResourceParams {
             tool_amount: 2.0,
             tool_uses: 30,
             craft_hours: 1,
+            bushes: 12,
+            bush_fruit: 6.0,
+            fruit_regrowth: 1.0,
+            fruit_per_gather: 3.0,
         }
     }
 }
@@ -160,7 +180,7 @@ impl Default for ResourceParams {
 const REFERENCE_CELLS: usize = 576;
 
 impl ResourceParams {
-    /// Espalha árvores e pedras num mapa de `width` x `height`, uma por célula
+    /// Espalha árvores, pedras e arbustos num mapa de `width` x `height`, uma por célula
     /// no máximo e fora das células em que `free` diz que não. `rng` deve ser
     /// só para isto, para não mudar o resto do mundo da seed.
     pub fn place(
@@ -177,6 +197,8 @@ impl ResourceParams {
         for (kind, n, amount) in [
             (ResourceKind::Tree, count(self.trees), self.tree_wood),
             (ResourceKind::Rock, count(self.rocks), self.rock_stone),
+            // Os arbustos começam sem frutos: só os ganham na época.
+            (ResourceKind::Bush, count(self.bushes), 0.0),
         ] {
             // Algumas tentativas por recurso: num mapa cheio podem ficar menos.
             for _ in 0..n {
@@ -193,10 +215,19 @@ impl ResourceParams {
         out
     }
 
-    /// Um dia de crescimento das árvores. As pedras não voltam.
-    pub fn regrow(&self, resources: &mut [Resource], days: f32) {
-        for r in resources.iter_mut().filter(|r| r.kind == ResourceKind::Tree) {
-            r.amount = (r.amount + self.tree_regrowth * days).min(self.tree_wood);
+    /// `days` de crescimento: as árvores crescem sempre, os arbustos ganham
+    /// frutos na época (`fruiting`) e perdem-nos fora dela. As pedras não
+    /// voltam.
+    pub fn regrow(&self, resources: &mut [Resource], days: f32, fruiting: bool) {
+        for r in resources.iter_mut() {
+            match r.kind {
+                ResourceKind::Tree => r.amount = (r.amount + self.tree_regrowth * days).min(self.tree_wood),
+                ResourceKind::Bush if fruiting => {
+                    r.amount = (r.amount + self.fruit_regrowth * days).min(self.bush_fruit)
+                }
+                ResourceKind::Bush => r.amount = (r.amount - self.fruit_regrowth * days).max(0.0),
+                ResourceKind::Rock => {}
+            }
         }
     }
 }
@@ -351,11 +382,25 @@ mod tests {
             Resource { x: 0, y: 0, kind: ResourceKind::Tree, amount: 0.0 },
             Resource { x: 1, y: 0, kind: ResourceKind::Rock, amount: 0.0 },
         ];
-        p.regrow(&mut r, 2.0);
+        p.regrow(&mut r, 2.0, false);
         assert_eq!(r[0].amount, 2.0 * p.tree_regrowth);
         assert_eq!(r[1].amount, 0.0);
-        p.regrow(&mut r, 100.0);
+        p.regrow(&mut r, 100.0, false);
         assert_eq!(r[0].amount, p.tree_wood, "não passa de uma árvore inteira");
+    }
+
+    #[test]
+    fn os_arbustos_so_dao_frutos_na_epoca() {
+        let p = ResourceParams::default();
+        let mut r = vec![Resource { x: 0, y: 0, kind: ResourceKind::Bush, amount: 0.0 }];
+        p.regrow(&mut r, 2.0, false);
+        assert_eq!(r[0].amount, 0.0);
+        p.regrow(&mut r, 2.0, true);
+        assert_eq!(r[0].amount, 2.0 * p.fruit_regrowth);
+        p.regrow(&mut r, 100.0, true);
+        assert_eq!(r[0].amount, p.bush_fruit, "não passa de um arbusto carregado");
+        p.regrow(&mut r, 1.0, false);
+        assert_eq!(r[0].amount, p.bush_fruit - p.fruit_regrowth, "fora da época caem");
     }
 
     #[test]
@@ -364,6 +409,7 @@ mod tests {
         let r = p.place(&mut Rng::new(1), 24, 24, |(x, _)| x != 0);
         assert_eq!(r.iter().filter(|r| r.kind == ResourceKind::Tree).count(), p.trees);
         assert_eq!(r.iter().filter(|r| r.kind == ResourceKind::Rock).count(), p.rocks);
+        assert_eq!(r.iter().filter(|r| r.kind == ResourceKind::Bush).count(), p.bushes);
         assert!(r.iter().all(|r| r.x != 0), "fora das células proibidas");
         let mut cells: Vec<_> = r.iter().map(|r| (r.x, r.y)).collect();
         cells.sort();

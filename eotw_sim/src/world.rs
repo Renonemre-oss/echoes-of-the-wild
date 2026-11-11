@@ -65,6 +65,9 @@ pub struct World {
     water: Vec<bool>,
     /// Quantas há, para não contar de novo.
     water_count: usize,
+    /// Carcaças deixadas pelo lobo: (x, y, kg de carne). Só a raposa as come
+    /// (os coelhos comem os restos da cabana, não carne).
+    carcasses: Vec<(usize, usize, f32)>,
 }
 
 impl World {
@@ -87,7 +90,45 @@ impl World {
             params,
             water: vec![false; width * height],
             water_count: 0,
+            carcasses: Vec::new(),
         }
+    }
+
+    pub fn add_carcass(&mut self, x: usize, y: usize, kg: f32) {
+        match self.carcasses.iter_mut().find(|c| (c.0, c.1) == (x, y)) {
+            Some(c) => c.2 += kg,
+            None => self.carcasses.push((x, y, kg)),
+        }
+    }
+
+    pub fn carcasses(&self) -> &[(usize, usize, f32)] {
+        &self.carcasses
+    }
+
+    pub fn carcass_at(&self, x: usize, y: usize) -> f32 {
+        self.carcasses.iter().find(|c| (c.0, c.1) == (x, y)).map_or(0.0, |c| c.2)
+    }
+
+    /// Come até `kg` da carcaça desta célula e devolve quanto comeu.
+    pub fn take_carcass(&mut self, x: usize, y: usize, kg: f32) -> f32 {
+        let Some(c) = self.carcasses.iter_mut().find(|c| (c.0, c.1) == (x, y)) else {
+            return 0.0;
+        };
+        let taken = kg.min(c.2);
+        c.2 -= taken;
+        self.carcasses.retain(|c| c.2 > 0.01);
+        taken
+    }
+
+    /// As carcaças apodrecem: perdem `fraction` por hora.
+    pub fn rot_carcasses(&mut self, fraction: f32) {
+        if self.carcasses.is_empty() {
+            return;
+        }
+        for c in &mut self.carcasses {
+            c.2 *= 1.0 - fraction;
+        }
+        self.carcasses.retain(|c| c.2 > 0.01);
     }
 
     /// Põe água numa célula: fica sem erva para sempre.
@@ -206,9 +247,9 @@ impl World {
     /// As árvores só crescem, por isso o abrigo só muda quando uma árvore
     /// cortada volta a ter `shelter_wood`: só então se refaz (antes refazia-se
     /// a cada hora de jogo).
-    pub fn regrow_resources(&mut self, params: &ResourceParams, days: f32) {
+    pub fn regrow_resources(&mut self, params: &ResourceParams, days: f32, fruiting: bool) {
         let before = self.whole_trees();
-        params.regrow(&mut self.resources, days);
+        params.regrow(&mut self.resources, days, fruiting);
         let threshold_changed = self.shelter_wood != params.shelter_wood;
         self.shelter_wood = params.shelter_wood;
         if threshold_changed || self.whole_trees() != before {
@@ -412,9 +453,9 @@ mod tests {
         w.take_resource(3, 3, 1.0);
         assert!(!w.tree_cover(3, 3), "basta tirar-lhe 1 de madeira para não abrigar");
         assert!(w.clearing(2, 4) && w.clearing(3, 3), "fica uma clareira à volta");
-        w.regrow_resources(&p, 0.5 / p.tree_regrowth);
+        w.regrow_resources(&p, 0.5 / p.tree_regrowth, false);
         assert!(w.clearing(2, 4), "ainda não está inteira");
-        w.regrow_resources(&p, 1.0 / p.tree_regrowth);
+        w.regrow_resources(&p, 1.0 / p.tree_regrowth, false);
         assert!(w.tree_cover(3, 3) && !w.clearing(2, 4), "inteira, volta a abrigar");
     }
 

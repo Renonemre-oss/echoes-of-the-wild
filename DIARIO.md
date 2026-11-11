@@ -33,6 +33,109 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira, a fechar o dia)
+
+### O Prototype 01 está completo e validado ✅
+
+**Porquê:** depois das espécies novas, faltava fechar o protótipo com os critérios do GDD (18.4, 18.5 e 18.6). Perguntaste se os lobos eram mesmo tão raros: são, à escala real (no ecrã vês ≈6% do mapa, e a alcateia atravessa-o numa hora). Escolheste ficar com a densidade média.
+
+**O que mudou:**
+- **Cores:** os veados passaram a amarelos e os lobos a vermelho vivo, para se verem bem.
+- **`eotw_cli --validate`:** o teste de equilíbrio na paisagem do jogo, com as cinco espécies, em 20 seeds de 100 dias. Escreve uma tabela que fica guardada em `docs/Validacao_Prototype01.md`.
+- **Travão de densidade nos herbívoros:** a validação mostrou javalis a chegar a 33 (o dobro do máximo medido na natureza), porque todas as fêmeas pariam ninhadas de 4 no mesmo dia, sem travão. Agora as crias descem até 0 quando a paisagem chega à capacidade de carga medida (veado 32/km², javali 11/km²). O máximo passou a 21, num pico curto depois dos partos, e a média ficou em 6.
+
+**O que se mediu:**
+- **Equilíbrio:** nenhuma espécie chegou a 0 em 20 seeds; coelhos ≈5900, raposas ≈250, veados ≈13, javalis ≈6; a erva nunca desceu de 4,5.
+- **Cabana:** com comida, as raposas passam 4,9 vezes mais horas na zona; a cadeia coelho → raposa → caça aconteceu 103 vezes, em 11 de 20 seeds, sem ser escrita.
+- **Desempenho, transição agregado/individual, guardar e carregar:** todos dentro dos critérios.
+- **Duas notas:** a migração de segurança não é contada na paisagem inteira, e a cadeia com o lobo (lobo mata → carcaça → raposa) existe mas é rara à escala real.
+
+**Falta:** as tuas respostas às cinco perguntas de 18.5 (se compreendes os animais, se parecem naturais, se há situações não escritas, se as consequências se veem, se o mundo é interessante sem combate).
+
+**Testes:** passam 144 no `eotw_sim` e 17 no jogo. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** o commit do Prototype 01. Depois, a pesquisa a fundo de cada animal, um de cada vez.
+
+---
+
+## 2026-11-11 (quarta-feira, muito tarde)
+
+### Veados, javalis e lobos, à escala real 🦌🐗🐺
+
+**Porquê:** eram as últimas espécies do Prototype 01. Pediste uma pesquisa curta primeiro.
+
+**A pesquisa** (três investigadores em paralelo e um relatório: `reports/Veados javalis e lobos.md`, notas em `research_notes/Veados javalis e lobos/`). Foi mundial, mas com lacunas: Hokkaido, Yellowstone, Białowieża, Cárpatos, França, Itália, Índia, Negev, e uma revisão do javali com 129 estimativas em 5 continentes. Corrigiu três números das fichas antigas: o lobo dos Cárpatos mata 32% crias, 54% fêmeas e 14% machos (não 44/40/16); o território em Białowieża é 219 km²; e não há fonte para "o javali cresce mais de 100% por ano" (o máximo medido é 24%). Também apanhei um erro de contas do relatório: 18 anos são 648 dias de jogo, não 177.
+
+**A escala decidiu tudo.** Com células de 10 m, a paisagem tem 1,44 km². Os veados e os javalis cabem à densidade real (uns 14 e 4), mas o lobo não: o território de uma alcateia são 90 a 240 paisagens. Como a pesquisa foi mundial, escolheste a **opção A, tudo à escala real**. Comprimir como a raposa (×100) teria feito os veados comerem várias vezes a erva toda.
+
+**O que mudou:**
+- **Veados e javalis** (`ungulates.rs`): um só modelo com dois conjuntos de números. Andam em grupos, entram e saem pelas bordas porque a área vital deles é maior do que a paisagem, e comem a erva (perto de ti a de cada célula, longe a média da região).
+  - O veado anda de manhã cedo e ao fim do dia, e foge de ti a 15 células.
+  - O javali anda de noite, vai aos arbustos com frutos e esvazia-os (compete contigo), fossa a terra fora da época, e foge a 9 células, ou a 10 se ouve o machado.
+  - Os dois só atravessam o rio nos vaus. Nascem crias no mês certo e envelhecem no ano de 36 dias.
+- **Lobo** (`wolves.rs`): uma alcateia de 4–5 lobos atravessa a paisagem de noite, umas 3–4 vezes por ano de jogo, e sai em 1–2 horas. Se encontra veados ou javalis, tenta caçar, com as preferências medidas. Se mata, fica a comer e deixa uma carcaça. Foge de ti a 18 células.
+- **Carcaças:** só a raposa as come, e deixam cheiro de comida, por isso a raposa encontra-as sem código novo. Os coelhos não lhes tocam.
+- **No ecrã:** veados amarelos, javalis quase pretos, lobos vermelho vivo (e maiores), carcaças vermelho-escuras. Começaram castanhos e cinzentos, mas confundiam-se com a erva seca e as pedras, e mudaste-os. O painel conta os veados e os javalis e diz onde anda a alcateia.
+- O formato dos ficheiros guardados passou à versão 5.
+
+**O que se tentou e mudou:**
+- Primeiro dei ao lobo um êxito diferente para cada classe de presa. Mas as preferências já vêm das presas mortas, por isso a composição ficava torcida duas vezes (57% crias em vez de 32%). Agora o êxito é igual dentro de cada espécie, e o teste dá a composição dos Cárpatos.
+- Os veados ficavam em 9 em vez de 14, porque saíam mais grupos do que entravam. Agora entra um grupo por dia enquanto houver menos do que à densidade real: ficaram em 12,8.
+
+**Medido:**
+- 12,8 veados e 4,9 javalis em média (60 dias).
+- A alcateia entrou 46 vezes em 360 dias e não matou nenhuma presa cá dentro: é a escala real.
+- Os javalis comem 22% dos frutos de setembro.
+- Uma hora de simulação custa 0,54 ms, e a viragem do dia 0,93 ms. No jogo, a simulação fica em ≈1 ms por frame, com picos de 4–7 ms.
+
+**Ficou por fazer:** fome dos herbívoros; o javali a comer láparos; pegadas, cheiro e uivos do lobo; a raposa a fugir do lobo; a caça ao javali a torná-lo noturno. E, quando o Prototype 01 estiver fechado, a pesquisa a fundo de cada animal, um de cada vez.
+
+**Testes:** passam 144 no `eotw_sim` e 17 no jogo. Há 14 novos: 7 dos herbívoros, 4 do lobo e 3 na paisagem (densidade real, javalis a comer frutos, alcateia rara). A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** fechar o Prototype 01 com os critérios de validação (GDD 18.5).
+
+---
+
+## 2026-11-11 (quarta-feira, quase meia-noite)
+
+### O trabalho do jogador faz barulho 🪓
+
+**Porquê:** o Prototype 01 pede eventos de ruído (GDD 7.6). Até aqui só os coelhos ouviam os passos do jogador, a 3 células.
+
+**O que mudou** (versão simplificada):
+- **Cortar madeira e partir pedra ouvem-se a 10 células**, construir a 6 e fazer ferramentas a 3. Procurar comida e apanhar folhas ou frutos são silenciosos.
+- **Enquanto dura o barulho**, os coelhos que o ouvem fogem para a toca e as raposas afastam-se, como se te vissem perto. Por baixo, o barulho só alarga, durante essas horas, o alcance a que os coelhos ouvem o jogador e a distância a que as raposas se afastam dele.
+- **Medido** (10 seeds, 3 horas de machado): nas 10 células à volta ficam 497 coelhos fora da toca, contra 1059 com o jogador calado, e 1 raposa contra 13.
+- Ficou de fora o ruído entre animais (o grito de um coelho apanhado, um animal a fugir), porque mexe no equilíbrio medido. Sem jogador a simulação fica igual.
+- O formato dos ficheiros guardados passou à versão 4.
+
+**Testes:** passam 130 no `eotw_sim` e 17 no jogo, com 1 novo: o barulho do jogador espanta os animais. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** as espécies novas, a começar pelo veado.
+
+---
+
+## 2026-11-11 (quarta-feira, já tarde)
+
+### Arbustos e frutos da época 🫐
+
+**Porquê:** o Prototype 01 pede "árvores, arbustos, ervas e frutos". É uma versão simplificada, e a pesquisa fica para depois.
+
+**O que mudou:**
+- **Arbustos:** 12 por cada 24x24, verde-oliva no ecrã, a ficar roxos quando têm frutos.
+- **Frutos só na época:** de julho a outubro cada arbusto ganha 1 fruto por dia, até 6. Fora dela perde 1 por dia, porque os frutos caem e apodrecem. Usa o calendário que já existia, por isso no clima do sul as épocas trocam.
+- **E ao lado de um arbusto** apanha 3 frutos numa hora. Cada fruto dá 15 de saciedade, por isso na época apanhar frutos rende 45 por hora, contra 25 a procurar na erva. **C** come os frutos primeiro. Fora da época o painel explica que o arbusto só dá frutos de julho a outubro.
+- Os animais ainda não comem frutos nem se escondem nos arbustos, para não mexer no equilíbrio medido. Isso fica para os veados, os javalis e a raposa.
+- O formato dos ficheiros guardados passou à versão 3.
+
+**Desempenho:** a mediana da simulação ficou igual (cerca de 1,2 ms por frame a 240 horas por segundo). Com o processador a 82 °C as medições variaram muito, e numa de quatro houve picos acima dos 8 ms do orçamento. Não vêm dos arbustos; é para medir outra vez com a máquina fria, e ver se os picos vêm da viragem do dia, quando todas as regiões longe avançam ao mesmo tempo.
+
+**Testes:** passam 129 no `eotw_sim` e 17 no jogo. Há 2 novos: os arbustos só dão frutos na época; os frutos apanham-se na época e comem-se primeiro. O teste dos recursos por região passou a contar os arbustos. A saída da CLI ficou igual, byte a byte.
+
+**Próximo passo:** os eventos de ruído.
+
+---
+
 ## 2026-11-11 (quarta-feira, à noite, mais tarde)
 
 ### Um rio atravessa a paisagem 🏞️

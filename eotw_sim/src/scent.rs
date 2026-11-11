@@ -40,6 +40,10 @@ pub struct ScentParams {
     pub decay: f32,
     /// Cheiro depositado por tick por cada unidade de restos de comida.
     pub food_per_scrap: f32,
+    /// Cheiro de comida que uma carcaça deixa por hora, por kg, e a fração
+    /// da carne que apodrece por hora (1%: metade em ≈3 dias, como no verão).
+    pub food_per_carrion_kg: f32,
+    pub carrion_rot: f32,
     /// Cheiro depositado por tick por cada coelho fora da toca. Dentro da toca
     /// o cheiro fica debaixo da terra: assim a toca continua a ser um refúgio.
     pub prey_per_rabbit: f32,
@@ -53,6 +57,8 @@ impl Default for ScentParams {
             diffusion: 0.6,
             decay: 0.01,
             food_per_scrap: 1.0,
+            food_per_carrion_kg: 0.5,
+            carrion_rot: 0.01,
             prey_per_rabbit: 1.0,
             human_per_tick: 5.0,
         }

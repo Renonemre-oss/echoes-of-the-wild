@@ -22,6 +22,9 @@ pub struct NeedsParams {
     pub heal_above: f32,
     /// Saciedade que uma porção de comida dá.
     pub meal: f32,
+    /// Saciedade que um fruto dá. Um arbusto carregado dá 3 numa hora (45),
+    /// mais do que uma hora a procurar na erva (25).
+    pub fruit_meal: f32,
     /// Vegetação que cada porção de comida gasta. A erva só dá comida se
     /// tiver pelo menos isto.
     pub forage_biomass: f32,
@@ -40,6 +43,7 @@ impl Default for NeedsParams {
             heal_per_hour: 1.0,
             heal_above: 30.0,
             meal: 25.0,
+            fruit_meal: 15.0,
             forage_biomass: 3.0,
             forage_hours: 1,
             wake_with: 25.0,
@@ -82,8 +86,9 @@ impl Needs {
         false
     }
 
-    pub fn eat(&mut self, p: &NeedsParams) {
-        self.food = (self.food + p.meal).min(100.0);
+    /// Come algo que dá `value` de saciedade.
+    pub fn eat(&mut self, value: f32) {
+        self.food = (self.food + value).min(100.0);
     }
 
     /// Uma palavra para o painel.
@@ -129,8 +134,8 @@ mod tests {
     fn comer_tira_a_fome_e_a_saude_volta() {
         let p = NeedsParams::default();
         let mut n = Needs { food: 10.0, health: 50.0, faints: 0 };
-        n.eat(&p);
-        n.eat(&p);
+        n.eat(p.meal);
+        n.eat(p.meal);
         assert_eq!(n.food, 60.0);
         n.tick(&p);
         assert_eq!(n.health, 51.0);

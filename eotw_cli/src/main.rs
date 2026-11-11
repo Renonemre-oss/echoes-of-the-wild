@@ -21,6 +21,8 @@ fn print_help() {
     println!("  --cabin      teste da cabana: tempo na zona com e sem comida");
     println!("  --sweep      varrer os parâmetros sensíveis com várias seeds");
     println!("  --bench      medir quanto tempo demora um tick, por tamanho de mapa");
+    println!("  --validate   teste de equilíbrio do Prototype 01 (GDD 18.6): a paisagem");
+    println!("               inteira, com todas as espécies, em várias seeds (por omissão 20)");
     println!("  --seeds N    quantas seeds usar em --sweep e --cabin (por omissão 40 e 20)");
     println!("  --help       mostrar esta ajuda");
 }
@@ -30,6 +32,7 @@ enum Mode {
     Cabin,
     Sweep,
     Bench,
+    Validate,
 }
 
 fn main() {
@@ -62,6 +65,7 @@ fn main() {
             "--cabin" => mode = Mode::Cabin,
             "--sweep" => mode = Mode::Sweep,
             "--bench" => mode = Mode::Bench,
+            "--validate" => mode = Mode::Validate,
             "--help" | "-h" => {
                 print_help();
                 return;
@@ -80,7 +84,46 @@ fn main() {
         Mode::Cabin => cabin(seeds.unwrap_or(20), days),
         Mode::Sweep => run_sweep(seeds.unwrap_or(40), days),
         Mode::Bench => bench(),
+        Mode::Validate => validate(seeds.unwrap_or(20), days),
     }
+}
+
+/// GDD 18.6: o teste de equilíbrio na paisagem do jogo, com todas as
+/// espécies. Escreve uma tabela em Markdown, para guardar e comparar versões.
+fn validate(seeds: u64, days: u64) {
+    use eotw_sim::validate;
+    println!("Teste de equilíbrio: paisagem de 5x5 regiões, {days} dias, {seeds} seeds");
+    println!();
+    println!("| Seed | Coelhos (mín–méd–máx) | Raposas | Veados | Javalis | Erva média | Lobos: visitas, presas |");
+    println!("|---|---|---|---|---|---|---|");
+    let r = |x: validate::Range| format!("{:.0}–{:.0}–{:.0}", x.min, x.mean, x.max);
+    let mut runs = Vec::new();
+    for seed in 1..=seeds {
+        let s = validate::run(seed, days);
+        println!(
+            "| {} | {} | {} | {} | {} | {:.2}–{:.2} | {}, {} |",
+            s.seed,
+            r(s.rabbits),
+            r(s.foxes),
+            r(s.deer),
+            r(s.boar),
+            s.biomass.min,
+            s.biomass.max,
+            s.wolf_visits,
+            s.wolf_kills
+        );
+        runs.push(s);
+    }
+    let gone = |f: fn(&validate::SeedRun) -> f32| runs.iter().filter(|s| f(s) == 0.0).count();
+    println!();
+    println!("Seeds em que alguma espécie chegou a 0:");
+    println!("  coelhos {}, raposas {}, veados {}, javalis {}",
+        gone(|s| s.rabbits.min), gone(|s| s.foxes.min), gone(|s| s.deer.min), gone(|s| s.boar.min));
+    let worst = |f: fn(&validate::SeedRun) -> f32| runs.iter().map(f).fold(f32::MIN, f32::max);
+    println!("Máximos de todas as seeds: coelhos {:.0}, raposas {:.0}, veados {:.0}, javalis {:.0}",
+        worst(|s| s.rabbits.max), worst(|s| s.foxes.max), worst(|s| s.deer.max), worst(|s| s.boar.max));
+    println!("Erva média mais baixa de todas as seeds: {:.2}",
+        runs.iter().map(|s| s.biomass.min).fold(f32::MAX, f32::min));
 }
 
 fn run(seed: u64, days: u64, csv_path: Option<String>) {

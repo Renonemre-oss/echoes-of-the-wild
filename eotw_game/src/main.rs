@@ -22,7 +22,7 @@ use bevy::render::settings::{PowerPreference, RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::render::RenderPlugin;
 use eotw_sim::landscape::{Gather, Landscape, REGION, WINDOW_MARGIN};
-use eotw_sim::{Breeding, Build, CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Stage, Tool, TICKS_PER_DAY};
+use eotw_sim::{Breeding, Build, CabinParams, Config, Craft, Rabbit, ResourceKind, Scent, Simulation, Species, Stage, Tool, TICKS_PER_DAY};
 
 /// Tamanho de uma célula do mapa no ecrã, em píxeis.
 const CELL: f32 = 26.0;
@@ -453,7 +453,11 @@ fn gather(keys: Res<ButtonInput<KeyCode>>, mut world: ResMut<World>, mut note: R
         note.0 = forage_note(world.0.forage());
     }
     if keys.just_pressed(KeyCode::KeyC) {
-        note.0 = if world.0.eat() { "Comeste uma porção.".into() } else { "Não tens comida: procura-a na erva com F.".into() };
+        note.0 = match world.0.eat() {
+            Some(eotw_sim::Item::Fruit) => "Comeste frutos.".into(),
+            Some(_) => "Comeste uma porção.".into(),
+            None => "Não tens comida: procura-a na erva com F, ou apanha frutos com E.".into(),
+        };
     }
 }
 
@@ -499,6 +503,12 @@ fn forage_note(result: Gather) -> String {
         Gather::Full => "O inventário está cheio.".into(),
         _ => "Aqui há pouca erva para encontrar comida.".into(),
     }
+}
+
+/// Onde anda a alcateia, para o painel.
+fn wolves_line(land: &Landscape) -> String {
+    let now = if land.pack.is_some() { "uma alcateia está a passar" } else { "longe" };
+    format!("Lobos: {now} ({} visitas, {} presas cá dentro)", land.wolf_visits, land.wolf_kills)
 }
 
 /// A fome e a saúde, para o painel.
@@ -566,6 +576,7 @@ fn gather_note(result: Gather) -> String {
             format!("Recolheste {amount} de {}. {article} {} partiu-se.", item.name(), tool.name())
         }
         Gather::Nothing => "Não há árvore nem pedra aqui ao lado, nem erva para folhas.".into(),
+        Gather::Empty(eotw_sim::Item::Fruit) => "O arbusto não tem frutos agora: dá-os de julho a outubro.".into(),
         Gather::Empty(item) => format!("Já não há {} aqui.", item.name()),
         Gather::Full => "O inventário está cheio.".into(),
     }
@@ -723,6 +734,13 @@ fn draw_animals(
             ResourceKind::Tree => (Color::srgb(0.05, 0.28, 0.10), r.amount / rp.tree_wood),
             ResourceKind::Rock if r.amount < 1.0 => continue,
             ResourceKind::Rock => (Color::srgb(0.55, 0.55, 0.58), r.amount / rp.rock_stone),
+            // Verde-oliva sem frutos, a ir para roxo quando está carregado.
+            ResourceKind::Bush => {
+                let f = r.amount / rp.bush_fruit;
+                let olive = Vec3::new(0.38, 0.45, 0.16);
+                let c = olive.lerp(Vec3::new(0.50, 0.12, 0.42), f);
+                (Color::srgb(c.x, c.y, c.z), 0.6)
+            }
         };
         items.push(mark(global(r.x, r.y), color, CELL * (0.3 + 0.55 * full), 1.2));
     }
@@ -736,6 +754,31 @@ fn draw_animals(
     }
     for f in &sim.foxes {
         items.push(mark(global(f.x, f.y), Color::srgb(0.90, 0.45, 0.12), CELL * 0.6, 3.0));
+    }
+    // As carcaças que o lobo deixou, vermelho-escuro.
+    for &(x, y, _) in sim.world.carcasses() {
+        items.push(mark(global(x, y), Color::srgb(0.45, 0.08, 0.08), CELL * 0.7, 1.8));
+    }
+    // Os veados (amarelos, para se verem bem na erva) e os javalis (quase
+    // pretos) andam em grupo: cada
+    // animal um quadrado, à volta da célula do grupo.
+    for h in &land.herds {
+        let (color, size) = match h.species {
+            Species::Deer => (Color::srgb(0.98, 0.84, 0.18), 0.8),
+            Species::Boar => (Color::srgb(0.22, 0.17, 0.14), 0.7),
+        };
+        for (i, _) in h.members.iter().enumerate() {
+            let offset = Vec2::new((i % 3) as f32 - 1.0, (i / 3) as f32 - 0.5) * CELL * 0.5;
+            items.push(Mark { offset, ..mark((h.x as i64, h.y as i64), color, CELL * size, 3.5) });
+        }
+    }
+    if let Some(pack) = &land.pack {
+        for i in 0..pack.wolves {
+            let offset = Vec2::new((i % 3) as f32 - 1.0, (i / 3) as f32 - 0.5) * CELL * 0.6;
+            let cell = (pack.x as i64, pack.y as i64);
+            // Vermelho vivo e maiores: são raros e passam depressa.
+            items.push(Mark { offset, ..mark(cell, Color::srgb(0.95, 0.12, 0.12), CELL * 0.9, 3.8) });
+        }
     }
     // De noite, o que está longe do jogador vê-se mal.
     let light = sim.light();
@@ -801,12 +844,12 @@ fn draw_panel(
          {:.0} frames por segundo, simulação até {:.1} ms\n\n\
          Região {}, {} (de {} x {})\n\
          À volta (3x3 regiões): {} coelhos, {} raposas\n\
-         No mundo: {} coelhos, {} raposas\n\
+         No mundo: {} coelhos, {} raposas, {} veados, {} javalis\n{}\n\
          Vegetação média à volta: {:.1} de {:.0}\n\n\
          {}\n{}\n{}{}\n\n\
-         Setas ou WASD: andar\nE: recolher (1 hora; na erva dá folhas)\nF: procurar comida na erva (1 hora)\nC: comer\nF5: guardar o mundo; F9: carregar\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
-         Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  castanho escuro: toca{cabin}\n  \
-         verde escuro: árvore (abrigo)\n  cinzento: pedra\n  azul-esverdeado: rio (os animais só passam nos vaus)\n  \
+         Setas ou WASD: andar\nE: recolher (1 hora; nos arbustos dá frutos, na erva folhas)\nF: procurar comida na erva (1 hora)\nC: comer (frutos primeiro)\nF5: guardar o mundo; F9: carregar\n1: machado (3 madeira, 2 pedra)\n2: picareta (2 madeira, 3 pedra)\nB: construir ou melhorar o abrigo\n(cortar, partir pedra e construir fazem barulho: os animais fogem)\nEspaço: pausa; + e -: velocidade\nO: ver o cheiro ({})\n\n\
+         Legenda:\n  quadrado azul: tu\n  bege a ruivo: o teu abrigo\n  branco: coelho\n  laranja: raposa\n  amarelo: veado; quase preto: javali\n  vermelho vivo: lobo; vermelho-escuro: carcaça\n  castanho escuro: toca{cabin}\n  \
+         verde escuro: árvore (abrigo)\n  cinzento: pedra\n  verde-oliva a roxo: arbusto, sem e com frutos\n  azul-esverdeado: rio (os animais só passam nos vaus)\n  \
          verde a castanho: muita a pouca erva{}",
         sim.day(),
         sim.tick() % TICKS_PER_DAY,
@@ -823,6 +866,9 @@ fn draw_panel(
         sim.foxes.len(),
         totals.0,
         totals.1,
+        land.animals(Species::Deer),
+        land.animals(Species::Boar),
+        wolves_line(land),
         sim.world.mean_biomass(),
         sim.world.capacity(),
         needs_line(land),

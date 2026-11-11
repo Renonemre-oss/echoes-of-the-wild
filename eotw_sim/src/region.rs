@@ -556,7 +556,9 @@ impl AggregateRegion {
     /// Um dia de simulação agregada.
     pub fn step_day(&mut self) {
         self.day += 1;
-        self.config.resources.regrow(&mut self.resources, 1.0);
+        let month = self.config.calendar.date(self.day * TICKS_PER_DAY).month;
+        let fruiting = self.config.calendar.fruiting(month);
+        self.config.resources.regrow(&mut self.resources, 1.0, fruiting);
         let p = self.params.clone();
         let b = self.biomass;
         let r = self.rabbit_count() as f32;

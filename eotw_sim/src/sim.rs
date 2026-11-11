@@ -9,6 +9,9 @@ use crate::resources::{Resource, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::{Scent, ScentParams};
 use crate::shelter::ShelterParams;
+use crate::noise::NoiseParams;
+use crate::ungulates::UngulateParams;
+use crate::wolves::PackParams;
 use crate::river::RiverParams;
 use crate::survival::NeedsParams;
 use crate::spatial::Grid;
@@ -228,6 +231,13 @@ pub struct Config {
     /// O rio. Só a paisagem (`Landscape`) o traça; uma simulação sozinha
     /// não tem rio.
     pub river: RiverParams,
+    /// O ruído do jogador a trabalhar (ver `noise.rs`).
+    pub noise: NoiseParams,
+    /// Os veados, os javalis e a alcateia de passagem (ver `ungulates.rs` e
+    /// `wolves.rs`). Só a paisagem os tem; uma simulação sozinha não.
+    pub deer: UngulateParams,
+    pub boar: UngulateParams,
+    pub wolves: PackParams,
     pub resources: ResourceParams,
     pub cabin: Option<CabinParams>,
 }
@@ -253,6 +263,10 @@ impl Default for Config {
             shelter: ShelterParams::default(),
             needs: NeedsParams::default(),
             river: RiverParams::default(),
+            noise: NoiseParams::default(),
+            deer: UngulateParams::deer(),
+            boar: UngulateParams::boar(),
+            wolves: PackParams::default(),
             resources: ResourceParams::default(),
             cabin: None,
         }
@@ -334,6 +348,9 @@ pub struct Simulation {
     /// O abrigo do jogador e o cheiro humano que deixa por hora, se estiver
     /// neste mapa (ver `shelter.rs`).
     pub camp: Option<((usize, usize), f32)>,
+    /// Até onde se ouve o jogador nesta hora, se estiver a fazer barulho
+    /// (ver `noise.rs`). Sem barulho, `None`.
+    pub noise: Option<usize>,
     tick: u64,
     /// Grelhas espaciais e listas auxiliares, refeitas em cada tick e
     /// guardadas aqui só para não alocar memória de novo.
@@ -420,6 +437,7 @@ impl Simulation {
             foxes,
             player: None,
             camp: None,
+            noise: None,
             tick,
             scratch: Scratch::default(),
             grid_min_pairs: GRID_MIN_PAIRS,
@@ -529,6 +547,11 @@ impl Simulation {
         if let Some(((x, y), amount)) = self.camp {
             self.world.scent.deposit(Scent::Human, x, y, amount);
         }
+        let carcasses = self.world.carcasses().to_vec();
+        for (x, y, kg) in carcasses {
+            self.world.scent.deposit(Scent::Food, x, y, kg * p.food_per_carrion_kg);
+        }
+        self.world.rot_carcasses(p.carrion_rot);
         self.world.scent.spread(p);
     }
 
@@ -568,7 +591,8 @@ impl Simulation {
     pub fn step(&mut self) {
         self.tick += 1;
         self.world.grow();
-        self.world.regrow_resources(&self.config.resources, 1.0 / TICKS_PER_DAY as f32);
+        let fruiting = self.config.calendar.fruiting(self.date().month);
+        self.world.regrow_resources(&self.config.resources, 1.0 / TICKS_PER_DAY as f32, fruiting);
         self.update_scent();
         // Com a luz desta hora, cada animal vê até onde lhe deixa a escuridão.
         let light = self.light();
@@ -579,6 +603,12 @@ impl Simulation {
         rabbit_params.vision = daylight::vision(rabbit_params.vision, rabbit_params.night_vision, light);
         if self.config.daylight.midday(self.tick % TICKS_PER_DAY) {
             rabbit_params.rest_above = rabbit_params.midday_rest_above;
+        }
+        // O barulho do jogador ouve-se mais longe do que os passos: os coelhos
+        // fogem dele, e as raposas afastam-se como se o vissem perto.
+        if let Some(radius) = self.noise {
+            rabbit_params.player_hearing = rabbit_params.player_hearing.max(radius);
+            fox_params.human_fear = fox_params.human_fear.max(radius);
         }
 
         // Primeiro as raposas: caçam e marcam os coelhos apanhados como `eaten`.
@@ -1407,6 +1437,35 @@ mod tests {
         let com: usize = (1..=20).map(|seed| horas_na_zona(seed, true)).sum();
         let sem: usize = (1..=20).map(|seed| horas_na_zona(seed, false)).sum();
         assert!(com * 2 <= sem, "{com} horas de raposa na zona com olfato, {sem} sem");
+    }
+
+    /// GDD 7.6: o barulho do jogador a trabalhar ouve-se longe. Com o
+    /// machado (10 células), os coelhos à volta fogem para as tocas e as
+    /// raposas afastam-se; calado, só reagem a quem o vê ou ouve os passos.
+    #[test]
+    fn o_barulho_do_jogador_espanta_os_animais() {
+        let (mut fora, mut fora_calado, mut raposas, mut raposas_calado) = (0, 0, 0, 0);
+        for seed in 1..=10 {
+            let mut calado = Simulation::warmed_up(Config { seed, ..Config::default() });
+            let centro = (calado.world.width / 2, calado.world.height / 2);
+            calado.place_player(Some(centro));
+            let mut barulho = Simulation::warmed_up(Config { seed, ..Config::default() });
+            barulho.place_player(Some(centro));
+            barulho.noise = Some(barulho.config.noise.chop);
+            for _ in 0..3 {
+                calado.step();
+                barulho.step();
+            }
+            let perto = |s: &Simulation, (x, y): (usize, usize)| distance((x, y), centro) <= s.config.noise.chop;
+            let ao_ar = |s: &Simulation| s.rabbits.iter().filter(|r| perto(s, (r.x, r.y)) && !s.world.is_burrow(r.x, r.y)).count();
+            let raposas_perto = |s: &Simulation| s.foxes.iter().filter(|f| perto(s, (f.x, f.y))).count();
+            fora += ao_ar(&barulho);
+            fora_calado += ao_ar(&calado);
+            raposas += raposas_perto(&barulho);
+            raposas_calado += raposas_perto(&calado);
+        }
+        assert!(fora * 2 < fora_calado, "coelhos fora da toca: {fora} com barulho, {fora_calado} calado");
+        assert!(raposas < raposas_calado, "raposas perto: {raposas} com barulho, {raposas_calado} calado");
     }
 
     /// As grelhas espaciais só podem mudar a velocidade, nunca o resultado:
