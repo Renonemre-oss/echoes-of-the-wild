@@ -33,6 +33,43 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-11 (quarta-feira, ao fim do dia)
+
+### O hardware-alvo e o orçamento de tempo ⏱️
+
+**Porquê:** o GDD dizia "hardware-alvo ainda por definir". Fizemos a lista do que falta no Prototype 01 e começámos pelo mais curto.
+
+**O que ficou definido** (no GDD, 18.6):
+- **Hardware-alvo mínimo:** o teu portátil, com um i5-10210U, a gráfica Intel integrada e 7,5 GB de memória.
+- **Orçamento:** 60 frames por segundo (16,7 ms por frame). A simulação pode gastar até 8 ms no pior frame, mesmo à velocidade máxima, e o percentil 95 do frame tem de ficar abaixo de 10 ms.
+
+**Medido:** a 240 horas por segundo, o frame mediano é de 4,3 ms (230 fps), o p95 de 6,1 ms e o pior de 8,8 ms. A simulação gasta no máximo 3,2 ms. Cabe com folga. A partir de agora, cada espécie nova volta a passar por esta medição.
+
+**Próximo passo:** o rio.
+
+---
+
+## 2026-11-11 (quarta-feira, mais tarde)
+
+### O que o jogador muda no mundo fica 🌳
+
+**Porquê:** o ponto seguinte da Etapa 7 era testar se as alterações ao ambiente ficam.
+
+**O teste novo** (`as_alteracoes_do_jogador_ficam`) corta todas as árvores de uma região, come-lhe a erva toda e constrói o abrigo. Depois o jogador vai para longe, e a região passa a agregada. Lá longe passam 2 dias, o jogo guarda e carrega, e o jogador volta. Ao lado corre um mundo igual onde ninguém mexeu, para comparar.
+
+**O que se viu:** tudo ficou, e não foi preciso corrigir nada.
+- As árvores continuam cortadas e a crescer 0,1 por dia, com a clareira à volta.
+- O abrigo está no mesmo sítio e volta a cheirar a gente.
+- A erva da região fica com menos de metade: 2,2 contra 4,8 no mundo onde ninguém mexeu.
+
+**Limite conhecido:** enquanto a região está agregada, guarda-se só a erva média, não a de cada célula, e o cheiro perde-se. O cheiro desce 1% por hora, por isso ao fim de uns dias já se teria quase ido.
+
+**Testes:** passam 124 no `eotw_sim` e 17 no jogo.
+
+**Próximo passo:** espécies novas do Prototype 01 (veados, javalis e lobos), começando pela pesquisa.
+
+---
+
 ## 2026-11-11 (quarta-feira, à noite)
 
 ### Guardar e carregar o mundo 💾

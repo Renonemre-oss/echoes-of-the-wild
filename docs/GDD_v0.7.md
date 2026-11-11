@@ -1288,7 +1288,7 @@ O teste será bem-sucedido se:
 - Algumas espécies reagirem a ameaças de forma diferente.
 - As relações entre espécies produzirem acontecimentos compreensíveis.
 - O jogador conseguir perceber que uma ação sua alterou o comportamento local.
-- A simulação funcionar com performance aceitável no hardware-alvo, ainda por definir.
+- A simulação funcionar com performance aceitável no hardware-alvo (ver 18.6, Performance).
 
 ## 18.5. Critérios de validação
 
@@ -1327,7 +1327,20 @@ Os valores são ponto de partida e devem ser ajustados com os primeiros resultad
 - A população total antes e depois da conversão é igual dentro da tolerância definida.
 - Nenhum animal é gerado dentro da distância mínima ao jogador.
 
-**Performance:** o passo de simulação cabe no orçamento de tempo definido para o hardware-alvo (a definir).
+**Performance:** o passo de simulação cabe no orçamento de tempo definido para o hardware-alvo.
+
+**Hardware-alvo (definido em 2026-11-11):** o mínimo é o portátil de desenvolvimento: Intel Core i5-10210U (4 núcleos, 1,6 GHz), gráfica integrada Intel UHD (Vulkan, Mesa), 7,5 GB de memória, Linux. Se corre bem aqui, corre bem num computador comum.
+
+**Orçamento por frame:** 60 frames por segundo, ou seja, 16,7 ms por frame. Desse tempo, a simulação pode gastar até 8 ms no pior frame, mesmo à velocidade máxima (240 horas por segundo); o resto fica para desenhar. O frame no percentil 95 deve ficar abaixo de 10 ms.
+
+**Medido no Prototype 01** (`cargo run --release -p eotw_game -- --frames 600 --speed 240`; paisagem de 5x5 regiões, janela de 3x3 completa):
+
+| Velocidade | Frame (mediana) | Frame (p95) | Pior frame | Simulação (pior) |
+|---|---|---|---|---|
+| 24 horas/s | 3,7 ms (270 fps) | 6,5 ms | 8,7 ms | 1,7 ms |
+| 240 horas/s | 4,3 ms (230 fps) | 6,1 ms | 8,8 ms | 3,2 ms |
+
+Cabe com folga. Uma região longe do jogador (agregada) custa 1,5 µs por dia de jogo, e uma completa 509 µs: o custo está na janela, não no tamanho do mundo. Cada espécie nova tem de voltar a passar por esta medição.
 
 ---
 
@@ -1400,7 +1413,7 @@ Isto permite aprender lógica e estruturas de dados sem misturar logo dificuldad
 ## Etapa 7 — Persistência e expansão
 
 - Guardar e carregar mundos. **Feito (versão simples):** F5 guarda o mundo todo em `saves/mundo.json` e F9 carrega-o. Vai tudo: a configuração, as regiões agregadas, a janela com cada animal, a erva, o cheiro, as árvores, o abrigo, o inventário, a fome e a saúde, e o estado dos números ao acaso. Por isso o mundo carregado continua exatamente como o original teria continuado (há um teste que o confirma). Um ficheiro de outra versão do formato dá um erro claro. Num mundo de 8x8 regiões o ficheiro tem 774 KB e guarda e carrega em poucos milissegundos. Por agora só há um ficheiro.
-- Testar alterações ambientais persistentes.
+- Testar alterações ambientais persistentes. **Feito:** um teste corta as árvores de uma região, come-lhe a erva e constrói o abrigo; o jogador vai para longe (a região passa a agregada), guarda, carrega e volta. As árvores continuam cortadas e a crescer (0,1 por dia), com a clareira à volta; o abrigo está no mesmo sítio e volta a cheirar a gente; a erva fica abaixo de metade da de um mundo igual onde ninguém mexeu (2,2 contra 4,8 ao fim de 2 dias). Limite conhecido: enquanto a região está agregada guarda-se só a erva média, não célula a célula, e o cheiro perde-se (a 1% por hora, já se teria quase ido).
 - Acrescentar novas espécies.
 - Acrescentar novas regiões e biomas.
 - Melhorar a geração do mundo.

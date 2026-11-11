@@ -1177,6 +1177,84 @@ mod tests {
         assert!(Landscape::load("isto não é um mundo").is_err());
     }
 
+    /// GDD 19, Etapa 7: o que o jogador muda no mundo fica, quando se afasta
+    /// (a região passa a agregada) e volta, e quando guarda e carrega. As
+    /// árvores cortadas continuam cortadas (e a crescer), com a clareira à
+    /// volta; o abrigo fica onde estava e volta a cheirar a gente; a erva
+    /// gasta continua mais baixa do que num mundo igual onde ninguém mexeu.
+    #[test]
+    fn as_alteracoes_do_jogador_ficam() {
+        let mut l = paisagem(1, 5, (12, 12));
+        let mut controlo = paisagem(1, 5, (12, 12));
+        let lado = ao_lado_de_arvore(&l, (12, 12));
+        ir_para(&mut l, lado);
+        ir_para(&mut controlo, lado);
+        dar(&mut l, Item::Wood, 6);
+        assert_eq!(l.build(), Build::Built(Stage::Ramos));
+        for _ in 0..l.config.shelter.hours_of(Stage::Ramos) {
+            controlo.step();
+        }
+        // Corta todas as árvores da região 0 e come a erva toda dela.
+        let arvores: Vec<(usize, usize)> = l
+            .window_sim()
+            .world
+            .resources()
+            .iter()
+            .filter(|r| r.kind == ResourceKind::Tree && r.x < REGION && r.y < REGION)
+            .map(|r| (r.x, r.y))
+            .collect();
+        let (ox, oy) = l.window_origin();
+        assert_eq!((ox, oy), (0, 0));
+        let world = &mut l.window.sim.world;
+        for &(x, y) in &arvores {
+            world.take_resource(x, y, f32::INFINITY);
+        }
+        for y in 0..REGION {
+            for x in 0..REGION {
+                world.set_biomass(x, y, 0.5);
+            }
+        }
+        let clareira = arvores.iter().find_map(|&(x, y)| {
+            world.neighbors(x, y).into_iter().flatten().find(|&(a, b)| world.clearing(a, b))
+        });
+        let clareira = clareira.expect("à volta de uma árvore cortada fica uma clareira");
+        let tick = l.window_sim().tick();
+
+        // Vai para longe: a região 0 sai da janela e passa a agregada.
+        let longe = (4 * REGION + 12, 12);
+        ir_para(&mut l, longe);
+        ir_para(&mut controlo, longe);
+        assert!(l.region(0, 0).is_some(), "a região 0 devia estar agregada");
+        l.run_days(2);
+        controlo.run_days(2);
+        let erva = |l: &Landscape| l.region(0, 0).unwrap().biomass;
+        // Medido: 2,2 contra 4,8.
+        assert!(erva(&l) < 0.8 * erva(&controlo), "erva: {} contra {}", erva(&l), erva(&controlo));
+
+        // Guarda e carrega lá longe, e volta.
+        let Ok(mut l) = Landscape::load(&l.save()) else { panic!("não carregou") };
+        ir_para(&mut l, lado);
+        ir_para(&mut controlo, lado);
+        assert!(l.region(0, 0).is_none(), "a região 0 devia estar na janela");
+        let dias = (l.window_sim().tick() - tick) as f32 / TICKS_PER_DAY as f32;
+        let p = &l.config.resources;
+        let crescido = (p.tree_regrowth * dias).min(p.tree_wood);
+        for &(x, y) in &arvores {
+            let r = l.window_sim().world.resource_at(x, y).expect("a árvore cortada continua lá");
+            assert!((r.amount - crescido).abs() < 0.05, "a árvore tem {} e devia ter {crescido}", r.amount);
+        }
+        assert!(l.window_sim().world.clearing(clareira.0, clareira.1), "a clareira continua");
+        assert_eq!(l.shelter().map(|s| (s.x, s.y, s.stage)), Some((lado.0, lado.1, Stage::Ramos)));
+        l.step();
+        let local = l.in_window(lado).unwrap();
+        assert!(l.window_sim().world.scent.at(crate::scent::Scent::Human, local.0, local.1) > 0.0);
+        let media = |l: &Landscape| {
+            let w = &l.window_sim().world;
+            (0..REGION * REGION).map(|i| w.biomass_at(i % REGION, i / REGION)).sum::<f32>() / (REGION * REGION) as f32
+        };
+        assert!(media(&l) < 0.8 * media(&controlo), "erva na volta: {} contra {}", media(&l), media(&controlo));
+    }
+
     /// As árvores e as pedras são terreno: não se perdem nem mudam quando a
     /// janela se desloca, e há as mesmas em cada região.
     #[test]
