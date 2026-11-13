@@ -7,25 +7,45 @@ use crate::resources::{Resource, ResourceKind, ResourceParams};
 use crate::rng::Rng;
 use crate::scent::ScentField;
 
+/// A erva (relatório "Plantas a fundo", secção 4).
+///
+/// **Unidade:** 1 unidade de biomassa (UB) = 20 g de matéria seca. Uma célula
+/// tem 100 m², por isso 1 g/m² = 5 UB por célula. É a unidade em que comem
+/// todos os animais: um coelho ≈3,3 UB por dia (≈70 g, Cooke 2014), um veado
+/// 100 (2 kg), um javali 40.
+///
+/// **Dois relógios.** As taxas por hora são reais (o crescimento, o que cada
+/// animal come). Os stocks que passam de uma estação para a outra valem o
+/// real a dividir por ≈10, porque o ano de jogo tem 36 dias e a primavera
+/// tem 9: a erva não consegue acumular mais do que isso numa primavera.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct VegetationParams {
-    /// Biomassa máxima de uma célula.
+    /// Biomassa máxima de uma célula, em UB: o que uma célula sem animais
+    /// acumula num ano de jogo. A produção da dehesa (100–270 g/m²/ano) a
+    /// dividir por ≈10 dá 10–27 g/m², ou 50–135 UB; a erva de pé num montado
+    /// pastado é de 29–37 g/m² (Nair et al. 2019, verificado).
     pub capacity: f32,
-    /// Velocidade de crescimento proporcional à biomassa que já existe.
-    pub regrowth: f32,
-    /// Pequeno crescimento que existe mesmo com biomassa zero (sementes, raízes).
-    /// Sem isto, uma célula totalmente comida nunca recuperava.
-    pub seed_growth: f32,
+    /// Crescimento médio por célula e por hora, em UB, com a célula vazia e um
+    /// mês de multiplicador 1. Para 200 g/m²/ano: 200 × 5 / 8760 ≈ 0,11. A
+    /// produção sobe com a chuva (Sala et al. 1988: −34 + 0,6 × mm).
+    pub growth: f32,
 }
 
 impl Default for VegetationParams {
     fn default() -> Self {
         Self {
-            capacity: 10.0,
-            regrowth: 0.02,
-            seed_growth: 0.004,
+            capacity: 100.0,
+            growth: 0.11,
         }
     }
+}
+
+/// Uma hora de crescimento de uma célula com `b` de erva, com o multiplicador
+/// do mês `month` (ver `Climate::grass_month`). Cresce mais depressa vazia e
+/// pára na capacidade. A mesma função serve a simulação completa e a região
+/// agregada, para as duas não divergirem.
+pub fn grass_step(b: f32, p: &VegetationParams, month: f32) -> f32 {
+    (b + p.growth * month * (1.0 - b / p.capacity)).clamp(0.0, p.capacity)
 }
 
 /// Até quantas células à volta (em quadrado) uma árvore abriga os coelhos.
@@ -175,17 +195,14 @@ impl World {
 
     /// Um passo de crescimento (curva logística): cresce devagar quando está muito
     /// baixa, mais depressa a meio, e estabiliza perto da capacidade.
-    pub fn grow(&mut self) {
-        let k = self.params.capacity;
-        let regrowth = self.params.regrowth;
-        let seed_growth = self.params.seed_growth;
+    /// Uma hora de crescimento de todas as células de terra, com o
+    /// multiplicador do mês (ver `grass_step`).
+    pub fn grow(&mut self, month: f32) {
+        let p = &self.params;
         for (b, &water) in self.biomass.iter_mut().zip(&self.water) {
-            if water {
-                continue;
+            if !water {
+                *b = grass_step(*b, p, month);
             }
-            let room = 1.0 - *b / k;
-            *b += (regrowth * *b + seed_growth * k) * room;
-            *b = b.clamp(0.0, k);
         }
     }
 
@@ -472,7 +489,7 @@ mod tests {
         let mut w = mundo();
         w.take(3, 3, 1000.0);
         for _ in 0..500 {
-            w.grow();
+            w.grow(1.0);
         }
         assert!(w.biomass_at(3, 3) > 1.0);
     }
@@ -481,7 +498,7 @@ mod tests {
     fn biomassa_nunca_passa_a_capacidade() {
         let mut w = mundo();
         for _ in 0..2000 {
-            w.grow();
+            w.grow(1.0);
         }
         for y in 0..w.height {
             for x in 0..w.width {

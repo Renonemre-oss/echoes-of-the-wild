@@ -248,8 +248,8 @@ impl Default for Config {
             seed: 42,
             width: 24,
             height: 24,
-            initial_rabbits: 20,
-            initial_foxes: 2,
+            initial_rabbits: 150,
+            initial_foxes: 10,
             foxes_arrive_day: 30,
             warmup_days: 60,
             burrows: 30,
@@ -279,6 +279,7 @@ impl Config {
         Self {
             initial_foxes: 0,
             migration: MigrationParams::off(),
+            fox: FoxParams { immigrants_per_year: 0.0, ..FoxParams::default() },
             ..Self::default()
         }
     }
@@ -297,7 +298,14 @@ pub struct DayStats {
     pub foxes: usize,
     pub fox_births: usize,
     pub fox_deaths_hunger: usize,
+    /// Das que morreram de fome, as que ainda não eram adultas.
+    pub fox_deaths_hunger_young: usize,
     pub fox_deaths_age: usize,
+    /// Raposas que saíram do mapa a partir (dispersão) e que chegaram de fora.
+    pub fox_emigrants: usize,
+    /// Das que partiram, as flutuantes (sem lugar e com fome).
+    pub fox_floaters: usize,
+    pub fox_immigrants: usize,
     /// Animais (de qualquer espécie) que chegaram por migração neste dia.
     pub migrations: usize,
     pub mean_biomass: f32,
@@ -318,7 +326,14 @@ struct DayCounters {
     deaths_predation: usize,
     fox_births: usize,
     fox_deaths_hunger: usize,
+    fox_deaths_hunger_young: usize,
     fox_deaths_age: usize,
+    #[serde(default)]
+    fox_emigrants: usize,
+    #[serde(default)]
+    fox_immigrants: usize,
+    #[serde(default)]
+    fox_floaters: usize,
     migrations: usize,
     cabin_visits_rabbits: usize,
     cabin_visits_foxes: usize,
@@ -590,7 +605,8 @@ impl Simulation {
     /// Avança um tick (uma hora de jogo).
     pub fn step(&mut self) {
         self.tick += 1;
-        self.world.grow();
+        let month = self.date().month;
+        self.world.grow(self.config.calendar.grass(month));
         let fruiting = self.config.calendar.fruiting(self.date().month);
         self.world.regrow_resources(&self.config.resources, 1.0 / TICKS_PER_DAY as f32, fruiting);
         self.update_scent();
@@ -604,6 +620,13 @@ impl Simulation {
         if self.config.daylight.midday(self.tick % TICKS_PER_DAY) {
             rabbit_params.rest_above = rabbit_params.midday_rest_above;
         }
+        // A época de cria do mês (relatório "Coelho a fundo", B1–B2, e
+        // "Raposa a fundo", B1–B2).
+        let calendar = &self.config.calendar;
+        let month_ticks = calendar.ticks_per_month() as f32;
+        rabbit_params.breed_per_tick = calendar.rabbit_breed_chance(month) / month_ticks;
+        fox_params.breed_per_tick = calendar.fox_breed_chance(self.tick);
+        fox_params.dispersal_per_tick = calendar.fox_dispersal_chance(month);
         // O barulho do jogador ouve-se mais longe do que os passos: os coelhos
         // fogem dele, e as raposas afastam-se como se o vissem perto.
         if let Some(radius) = self.noise {
@@ -686,7 +709,7 @@ impl Simulation {
                     self.cabin_log.fox_ate_scraps(self.tick);
                 }
             }
-            fox_newborns.extend(result.baby);
+            fox_newborns.extend(result.babies);
         }
         if let Some(c) = &cabin {
             if self.world.scraps_at(c.x, c.y) < scraps_before && !self.first_scraps_logged {
@@ -730,11 +753,7 @@ impl Simulation {
                 threats.clear();
                 threats.extend(nearby.iter().map(|&j| fox_positions[j]));
             }
-            if let Some(baby) =
-                rabbit.act(&mut self.world, &mut self.rng, &rabbit_params, threats, self.player)
-            {
-                newborns.push(baby);
-            }
+            newborns.extend(rabbit.act(&mut self.world, &mut self.rng, &rabbit_params, threats, self.player));
             if in_cabin(rabbit.x, rabbit.y) {
                 self.today.cabin_hours_rabbits += 1;
                 if !was_in {
@@ -756,19 +775,26 @@ impl Simulation {
         }
         self.rabbits.extend(newborns);
 
-        // Remover os que morreram, guardando a causa.
-        let max_age = self.config.rabbit.max_age_ticks;
+        // Remover os que morreram, guardando a causa. Os jovens morrem também
+        // pela densidade de adultos (`RabbitParams::juvenile_mortality`); conta
+        // como "idade e outras".
+        let rp = &self.config.rabbit;
+        let adults = self.rabbits.iter().filter(|r| r.age >= rp.maturity_ticks).count() as f32;
+        let capacity = rp.adult_capacity * (self.world.land_cells() as f32 / 576.0);
+        let juvenile_death = (rp.juvenile_mortality * adults / capacity).min(1.0);
         let mut eaten = 0;
         let mut hunger = 0;
         let mut old_age = 0;
+        let rng = &mut self.rng;
         self.rabbits.retain(|r| {
+            let juvenile = (rp.juvenile_from..rp.juvenile_until).contains(&r.age);
             if r.eaten {
                 eaten += 1;
                 false
             } else if r.energy <= 0.0 {
                 hunger += 1;
                 false
-            } else if r.age > max_age {
+            } else if r.age > rp.max_age_ticks || (juvenile && rng.next_f32() < juvenile_death) {
                 old_age += 1;
                 false
             } else {
@@ -787,14 +813,35 @@ impl Simulation {
         }
         self.foxes.extend(fox_newborns);
 
-        let fox_max_age = self.config.fox.max_age_ticks;
+        // A raposa também morre de outras causas (estrada, caça, doença),
+        // com uma probabilidade por idade; conta como "idade e outras".
+        let fp = &self.config.fox;
         let mut fox_hunger = 0;
+        let mut fox_hunger_young = 0;
         let mut fox_old_age = 0;
+        let (mut emigrants, mut floaters) = (0, 0);
+        let rng = &mut self.rng;
+        let world = &self.world;
         self.foxes.retain(|f| {
-            if f.energy <= 0.0 {
-                fox_hunger += 1;
+            let survival = if f.age < fp.cub_ticks {
+                fp.cub_survival
+            } else if f.age < fp.juvenile_ticks {
+                fp.juvenile_survival
+            } else {
+                fp.adult_survival
+            };
+            if f.leaving.is_some() && f.on_edge(world) {
+                // Chegou à margem: sai do mapa e vai para longe.
+                emigrants += 1;
+                floaters += (f.leaving == Some(crate::fox::Leaving::Floater)) as usize;
                 false
-            } else if f.age > fox_max_age {
+            } else if f.energy <= 0.0 {
+                fox_hunger += 1;
+                if f.age < fp.maturity_ticks {
+                    fox_hunger_young += 1;
+                }
+                false
+            } else if f.age > fp.max_age_ticks || rng.next_f32() >= survival {
                 fox_old_age += 1;
                 false
             } else {
@@ -802,7 +849,11 @@ impl Simulation {
             }
         });
         self.today.fox_deaths_hunger += fox_hunger;
+        self.today.fox_deaths_hunger_young += fox_hunger_young;
         self.today.fox_deaths_age += fox_old_age;
+        self.today.fox_emigrants += emigrants;
+        self.today.fox_floaters += floaters;
+        self.fox_immigration();
 
         self.check_milestones();
 
@@ -892,6 +943,29 @@ impl Simulation {
         }
     }
 
+    /// Raposas que chegam de fora do mapa à procura de lugar
+    /// (`FoxParams::immigrants_per_year`). Chegam pela margem, longe do
+    /// jogador, com a idade de uma cria da última época.
+    fn fox_immigration(&mut self) {
+        let fp = &self.config.fox;
+        if !self.foxes_arrived {
+            return;
+        }
+        let area = (self.config.width * self.config.height) as f32 / crate::region::REFERENCE_CELLS;
+        let chance = immigration_per_tick(fp, &self.config.calendar, self.foxes.len() as f32, area);
+        if self.rng.next_f32() >= chance {
+            return;
+        }
+        let age = immigrant_age(&self.config.calendar, fp, self.tick);
+        let energy = fp.energy_start;
+        let (x, y) = self.edge_cell();
+        let mut fox = Fox::newborn(x, y, energy);
+        fox.age = age;
+        self.foxes.push(fox);
+        self.foxes_present = true;
+        self.today.fox_immigrants += 1;
+    }
+
     /// Uma célula ao acaso na margem do mapa, longe do jogador.
     fn edge_cell(&mut self) -> (usize, usize) {
         self.spawn_cell(|rng, w, h| match rng.range_usize(4) {
@@ -933,7 +1007,11 @@ impl Simulation {
             foxes: self.foxes.len(),
             fox_births: t.fox_births,
             fox_deaths_hunger: t.fox_deaths_hunger,
+            fox_deaths_hunger_young: t.fox_deaths_hunger_young,
             fox_deaths_age: t.fox_deaths_age,
+            fox_emigrants: t.fox_emigrants,
+            fox_immigrants: t.fox_immigrants,
+            fox_floaters: t.fox_floaters,
             migrations: t.migrations,
             mean_biomass: self.world.mean_biomass(),
             cabin_visits_rabbits: t.cabin_visits_rabbits,
@@ -941,6 +1019,25 @@ impl Simulation {
             cabin_hours_rabbits: t.cabin_hours_rabbits,
             cabin_hours_foxes: t.cabin_hours_foxes,
         });
+    }
+}
+
+/// A probabilidade, num tick, de chegar uma raposa de fora a uma região com
+/// `foxes` raposas e `area` vezes 24x24 células.
+pub fn immigration_per_tick(fp: &FoxParams, cal: &crate::calendar::CalendarParams, foxes: f32, area: f32) -> f32 {
+    let room = (1.0 - foxes / (fp.full_density * area)).max(0.0);
+    fp.immigrants_per_year * area * room / (cal.days_per_year() * TICKS_PER_DAY) as f32
+}
+
+/// A idade de uma raposa jovem que chega de fora no tick `tick`: nasceu no
+/// início da última época das crias. Se essa época começou agora (a
+/// dispersão de março), é da época do ano anterior.
+pub fn immigrant_age(cal: &crate::calendar::CalendarParams, fp: &FoxParams, tick: u64) -> u64 {
+    let since = cal.ticks_since_fox_cub_season(tick).unwrap_or(fp.maturity_ticks);
+    if since < fp.maturity_ticks / 2 {
+        since + cal.days_per_year() * TICKS_PER_DAY
+    } else {
+        since
     }
 }
 
@@ -1088,9 +1185,12 @@ mod tests {
 
     #[test]
     fn migracao_traz_raposas_quando_desaparecem() {
+        // Sem raposas a chegar de fora, que encheriam a região vazia antes da
+        // migração de segurança (essas têm o seu teste).
         let mut sim = Simulation::new(Config {
             initial_foxes: 0,
             foxes_arrive_day: 0,
+            fox: FoxParams { immigrants_per_year: 0.0, ..FoxParams::default() },
             ..Config::default()
         });
         // Ao fim de 3 dias sem raposas, chega uma pela margem do mapa.
@@ -1171,7 +1271,12 @@ mod tests {
                 }
             }
         }
-        assert!(dia > 2.0 * noite, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
+        // Com a demografia do calendário (fase 1 da recalibração) os coelhos
+        // estão mais bem alimentados: os que fogem para a toca de noite ficam
+        // lá saciados, e a diferença desceu de mais de ×2 para ≈×1,7 (25%
+        // ao meio-dia contra 14% à meia-noite). A cobertura de noite (fase 2,
+        // "Coelho a fundo" N3) vai mexer nisto; até lá exige-se ×1,5.
+        assert!(dia > 1.5 * noite, "na toca: {noite:.2} à meia-noite, {dia:.2} ao meio-dia");
     }
 
     /// GDD 7.1 e 7.7: as árvores são abrigo. Onde se cortam fica uma clareira:
@@ -1215,7 +1320,10 @@ mod tests {
             }
         }
         assert!(coelhos[1] < 0.95 * coelhos[0], "coelhos na zona: {:.0} sem corte, {:.0} com", coelhos[0], coelhos[1]);
-        assert!(erva[1] > 1.05 * erva[0], "erva na zona: {:.0} sem corte, {:.0} com", erva[0], erva[1]);
+        // Com a erva em unidades de 20 g e capacidade 100, os coelhos comem uma
+        // parte pequena da erva de pé de uma célula, por isso menos coelhos
+        // dão só ≈3% mais erva (antes, com capacidade 10, mais do dobro).
+        assert!(erva[1] > 1.02 * erva[0], "erva na zona: {:.0} sem corte, {:.0} com", erva[0], erva[1]);
     }
 
     /// A medição do teste da cabana funciona: com cabana há visitas, sem
@@ -1275,7 +1383,7 @@ mod tests {
     #[test]
     fn comida_junto_a_cabana_atrai_animais() {
         let seeds = 1..=10;
-        let mut raposas = [0; 2];
+        let mut raposas = [0; 3];
         let mut coelhos_sem = 0;
         let mut coelhos_pouca = 0;
         let mut coelhos_muita = 0;
@@ -1291,9 +1399,23 @@ mod tests {
             coelhos_muita += muita.0;
             raposas[0] += sem.1;
             raposas[1] += pouca.1;
+            raposas[2] += muita.1;
         }
-        assert!(coelhos_pouca > coelhos_sem, "coelhos: {coelhos_sem} h sem comida, {coelhos_pouca} h com");
-        assert!(coelhos_muita > coelhos_pouca, "mais comida devia atrair mais coelhos");
+        // Com a demografia do calendário, as raposas descobrem a cabana em
+        // quase todas as seeds e caçam lá os coelhos: com 10 restos por dia os
+        // coelhos passam lá menos tempo do que sem comida (59 861 h contra
+        // 71 183). É a cadeia que o teste procura. Com 50 restos por dia a
+        // comida pesa mais e os coelhos são atraídos (89 696 h).
+        // Com a dispersão das raposas, as que comem na cabana não passam
+        // fome e não partem: com 50 restos por dia ficam lá ≈3 500 h por
+        // seed, contra ≈600 com 10, e caçam os coelhos que vêm pela comida.
+        // Os coelhos com muita comida ficaram iguais aos com pouca (111 344 h
+        // contra 115 255, sem comida 95 606): já não se exige mais com muita
+        // do que com pouca, mas que as duas atraiam e que muita comida atraia
+        // mais raposas.
+        assert!(coelhos_muita > coelhos_sem, "coelhos: {coelhos_sem} h sem comida, {coelhos_muita} h com muita");
+        assert!(coelhos_pouca > coelhos_sem, "coelhos: {coelhos_sem} h sem comida, {coelhos_pouca} h com pouca");
+        assert!(raposas[2] > raposas[1], "raposas: {} h com pouca comida, {} h com muita", raposas[1], raposas[2]);
         assert!(
             raposas[1] as f32 >= 1.5 * raposas[0] as f32,
             "raposas: {} h sem comida, {} h com",
@@ -1428,9 +1550,12 @@ mod tests {
             }
             sim.place_player(None);
             let mut horas = 0;
+            // Só as desmamadas: o teste corre em março, e uma cria a mamar
+            // que nasceu na zona não sai da toca (contava 12 horas cada uma).
+            let weaned = sim.config.fox.lactation_ticks;
             for _ in 0..12 {
                 sim.step();
-                horas += sim.foxes.iter().filter(|f| distance((f.x, f.y), (12, 12)) <= 5).count();
+                horas += sim.foxes.iter().filter(|f| f.age > weaned && distance((f.x, f.y), (12, 12)) <= 5).count();
             }
             horas
         };
@@ -1510,12 +1635,11 @@ mod tests {
     #[test]
     fn sem_vegetacao_os_coelhos_morrem_de_fome() {
         // Sem crescimento: senão a vegetação volta a crescer antes de os
-        // coelhos morrerem de fome (seed_growth repõe as células vazias).
+        // coelhos morrerem de fome.
         // Sem raposas: senão os coelhos podiam diminuir por serem caçados.
         let mut sim = Simulation::new(Config {
             vegetation: VegetationParams {
-                regrowth: 0.0,
-                seed_growth: 0.0,
+                growth: 0.0,
                 ..VegetationParams::default()
             },
             ..Config::without_foxes()
@@ -1543,16 +1667,52 @@ mod tests {
 
     /// Os animais que entram no mapa (as raposas que chegam e os que vêm
     /// por migração) não aparecem ao lado do jogador.
+    /// Uma raposa a partir sai do mapa quando chega à margem, e conta como
+    /// partida.
+    #[test]
+    fn a_raposa_que_parte_sai_pela_margem() {
+        let mut sim = Simulation::new(Config { initial_foxes: 1, foxes_arrive_day: 0, ..Config::default() });
+        sim.config.fox.immigrants_per_year = 0.0;
+        sim.run_days(1);
+        assert_eq!(sim.foxes.len(), 1);
+        sim.foxes[0].leaving = Some(crate::fox::Leaving::Floater);
+        for _ in 0..TICKS_PER_DAY {
+            sim.step();
+        }
+        assert!(sim.foxes.is_empty());
+        let partiram: usize = sim.stats.iter().map(|d| d.fox_emigrants).sum::<usize>() + sim.today.fox_emigrants;
+        let flutuantes: usize = sim.stats.iter().map(|d| d.fox_floaters).sum::<usize>() + sim.today.fox_floaters;
+        assert_eq!((partiram, flutuantes), (1, 1));
+    }
+
+    /// Chegam raposas de fora tanto mais quanto mais lugar há; numa região
+    /// cheia (`full_density`), nenhuma.
+    #[test]
+    fn chegam_raposas_onde_ha_lugar() {
+        let c = Config::default();
+        let (fp, cal) = (&c.fox, &c.calendar);
+        let vazia = immigration_per_tick(fp, cal, 0.0, 1.0);
+        let metade = immigration_per_tick(fp, cal, fp.full_density / 2.0, 1.0);
+        let cheia = immigration_per_tick(fp, cal, fp.full_density, 1.0);
+        let por_ano = vazia * (cal.days_per_year() * TICKS_PER_DAY) as f32;
+        assert!((por_ano - fp.immigrants_per_year).abs() < 1e-3);
+        assert!((metade - vazia / 2.0).abs() < 1e-9);
+        assert_eq!(cheia, 0.0);
+        assert_eq!(immigration_per_tick(fp, cal, 2.0 * fp.full_density, 1.0), 0.0);
+    }
+
     #[test]
     fn quem_chega_nao_aparece_ao_lado_do_jogador() {
         for seed in 1..=20 {
+            // Com muitas chegadas de fora, para as ver também.
             let mut sim = Simulation::new(Config {
                 seed,
                 initial_foxes: 6,
                 foxes_arrive_day: 1,
+                fox: FoxParams { immigrants_per_year: 500.0, ..FoxParams::default() },
                 ..Config::default()
             });
-            // Na margem, onde a migração chega.
+            // Na margem, onde a migração e as chegadas de fora chegam.
             let jogador = (0, 12);
             sim.place_player(Some(jogador));
             sim.run_days(1);
@@ -1560,11 +1720,26 @@ mod tests {
                 assert!(distance((f.x, f.y), jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: chegou em ({}, {})", f.x, f.y);
             }
             sim.foxes.clear();
+            sim.config.fox.immigrants_per_year = 0.0;
             sim.run_days(3);
             assert_eq!(sim.migrations_foxes, 1, "seed {seed}");
             for f in &sim.foxes {
                 assert!(distance((f.x, f.y), jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: raposa em ({}, {})", f.x, f.y);
             }
+            // As que chegam de fora: cada uma vê-se no tick em que chega (no
+            // fim da lista), antes de andar.
+            sim.config.fox.immigrants_per_year = 500.0;
+            let chegadas = |sim: &Simulation| sim.stats.iter().map(|d| d.fox_immigrants).sum::<usize>() + sim.today.fox_immigrants;
+            let inicio = chegadas(&sim);
+            for _ in 0..TICKS_PER_DAY {
+                let antes = chegadas(&sim);
+                sim.step();
+                if chegadas(&sim) > antes {
+                    let f = sim.foxes.last().expect("chegou uma");
+                    assert!(distance((f.x, f.y), jogador) > SPAWN_CLEAR_RADIUS, "seed {seed}: chegou de fora em ({}, {})", f.x, f.y);
+                }
+            }
+            assert!(chegadas(&sim) > inicio, "seed {seed}: não chegou nenhuma de fora");
         }
     }
 }

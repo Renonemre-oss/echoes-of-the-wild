@@ -33,6 +33,74 @@ Os marcos 5 a 10 e o 17 seguem o plano da secção 19 do GDD e podem mudar. Os m
 
 ---
 
+## 2026-11-12 (quinta-feira)
+
+### Recalibração, fase 1: a erva com estações e a reprodução no calendário 🌱🐇🦊
+
+**Porquê:** a pesquisa a fundo dos cinco animais e das plantas (relatórios "… a fundo" em `reports/`) mostrou que o jogo tinha **dois relógios misturados**. O comer e o crescer corriam em horas reais, mas as idades e o calendário corriam num ano comprimido de 36 dias. Por isso uma coelha tinha ≈1 cria por ano (na natureza 7–14), as raposas quase não morriam (viviam até 11 anos), e a erva crescia igual o ano todo. A fase 1 corrige a base, de que tudo o resto depende.
+
+**O que mudou:**
+- **Erva** (`world.rs`, `calendar.rs`): 1 unidade = 20 g de matéria seca; a capacidade passou de 10 para 100 por célula; o crescimento é absoluto (0,11 UB por hora numa célula vazia) e multiplicado pelo mês do clima. No mediterrânico, a primavera dá quase tudo e o verão nada. Uma só função de crescimento serve a janela e as regiões longe.
+- **Coelho** (`rabbit.rs`): pare com a probabilidade do mês (0 / 0,1 / 0,4 / 0,6, pela época de cria, que até aqui não era usada), 1,75 crias por coelho em média, uma vez por mês no máximo; adulto aos 4 meses, vida até 6 anos. Os jovens morrem mais quando há muitos adultos (Calvete 2006), com um terço da taxa medida, porque a medida já inclui os predadores e no jogo as raposas matam à parte.
+- **Raposa** (`fox.rs`): uma ninhada por ano, na época das crias; 1,8 crias por raposa (a ninhada do Ebro); 13% dos adultos não criam, e mais quando há rivais perto; a lactação custa à mãe ≈104 de energia; morte de fundo por idade (adultos 30% por ano, jovens 40%, crias mais 20% no primeiro mês); vida até 8 anos; começa-se com 10 raposas.
+- **Regiões longe** (`region.rs`): as crias e as mortes seguem as mesmas regras escritas da completa. Só a fome, a caça e o travão da raposa ficam em tabelas, medidas de novo. A expansão de volta para animais põe os coelhos perto das tocas e com a erva comida à volta, e calcula pelo calendário quem está à espera da próxima cria. Há também migração de segurança, como na completa.
+
+**O que se tentou e falhou, e porquê:**
+- Com a mortalidade dos jovens de Calvete inteira, os coelhos não chegavam para as raposas: a predação contava duas vezes.
+- Com a sobrevivência medida da raposa (0,55 / 0,42) como mortalidade de fundo, a população ficava presa em λ ≈ 1 e não recuperava. Os valores medidos já incluem as mortes da densidade, que no jogo vêm da fome.
+- Três bugs meus: o intervalo entre ninhadas de exatamente um ano empurrava a época para fora da janela; o custo do parto (35) com o limiar a 30 matava as mães; e o travão de território total impedia quase todas as crias.
+- Pôr as mães a caçar sempre, ou ninhadas maiores quando estão sozinhas, mudava demais o equilíbrio. Ficou para as fases seguintes.
+- Uma raposa esfomeada ficava presa ao cheiro dos restos da cabana: agora, abaixo de 20 de energia, caça o coelho que vê.
+
+**Medido:**
+- Uma região: ≈280 coelhos, ≈6,6 raposas, erva média ≈40 de 100; as raposas comem ≈28% do stock de coelhos por ano.
+- A versão longe bate com a completa (271 contra 278 coelhos; 6,8 contra 6,6 raposas; 41 contra 41 de erva).
+- Paisagem de 5×5, 20 seeds, 100 dias: nenhuma espécie chegou a 0; ≈300 coelhos e 6,6 raposas por região.
+
+**Testes mudados de propósito** (cada um explica no código porquê): os intervalos do equilíbrio da paisagem; o choque, agora no equilíbrio e medido ao fim de um ano; mais seeds nos testes que ficaram ruidosos; no máximo uma migração em 20 seeds na ida e volta; os testes de robustez com o limite de migrações do GDD 18.6 (uma por 1000 dias de região); o meio-dia na toca ×1,5 (era ×2); a erva depois do corte +2% (era +5%); e a cabana, onde com pouca comida as raposas caçam lá os coelhos.
+
+**Ficou por resolver nesta fase** (resolvido a seguir, abaixo): começar uma região fechada com uma só raposa dava 15 migrações em 12 seeds, e com o triplo das raposas também havia colapsos.
+
+### As raposas: três bugs e a dispersão a sério 🦊➡️
+
+**Porquê:** as raposas eram frágeis nos extremos. Ao procurar a causa, apareceram três bugs, e faltava o que na natureza segura uma população de raposas: as que estão a mais partem, e onde há lugar chegam outras.
+
+**Os bugs:**
+- **Só 87% tentavam parir.** A chance era 1/72 por hora nos dois meses da época. Agora é 1 / horas que faltam na época: a raposa que pode parir pare de certeza, numa hora ao acaso (68–100% criam logo no primeiro inverno, relatório "Raposa a fundo").
+- **As crias caçavam sozinhas desde a primeira hora** e morriam de fome em 3 dias. Agora ficam na toca a mamar durante as 5 semanas da lactação, sem gastar, e quem paga é a mãe.
+- **As mães a amamentar morriam de fome:** depois de comer ficavam um dia "saciadas" sem caçar, a gastar a lactação. Agora voltam a caçar abaixo de 20 de energia. E a lactação conta metade (≈52 por ninhada), como a ninhada, porque cada raposa do jogo é meio casal e o macho também leva comida à toca.
+
+**A dispersão:**
+- **Quem não cria** depende da densidade, como no relatório (0% a mais de 80%): 0% sozinha e mais 15% por cada rival perto. Antes era 13% fixo mais 3% por rival.
+- **As jovens partem** de outubro a março, com a tabela de Bristol (≈33% no ano), que estava no calendário mas ninguém lia.
+- **As flutuantes partem:** uma adulta com rivais a mais e abaixo de 40 de energia parte com 10% por hora. As mães a amamentar e as jovens antes da dispersão não partem.
+- **Quem parte** anda para a margem e sai do mapa. A dispersão vai a 5–30 km, muito mais do que a paisagem (1,2 km).
+- **De fora chegam flutuantes à procura de lugar**, o ano todo e tanto mais quanto mais lugar há: 12 por ano numa região vazia, nenhuma numa com 10 raposas ou mais (o "efeito de vácuo" dos abates).
+- **Na versão longe:** as mesmas regras para as jovens e para as chegadas. As flutuantes seguem uma tabela medida pela densidade de coelhos e de raposas, com o mês a multiplicar.
+
+**O que se tentou e falhou, e porquê:**
+- **Dar mais roedores às raposas** (dieta alternativa): as raposas bem alimentadas mantinham-se e comiam ainda mais coelhos, e com 30 raposas chegou-se a 2 coelhos.
+- **Chegadas iguais às partidas:** as flutuantes que chegavam a uma região cheia voltavam a partir, e quanto mais chegavam mais partiam. O ponto fixo dava 13 chegadas por ano e os coelhos caíam a 15. Por isso as chegadas passaram a depender do lugar livre.
+- **Flutuantes a partir abaixo de 20 de energia** morriam de fome antes de chegar à margem.
+- **As mães a amamentar e as crias recém-desmamadas partiam** em abril–maio (5% por dia), deixando as crias. Deixaram de poder partir como flutuantes.
+
+**Medido:**
+- Uma região: ≈300 coelhos e ≈8 raposas; partem ≈4,8 raposas por ano (3 flutuantes) e chegam ≈4,1.
+- Margens da robustez, 12 seeds: **nenhuma migração em nenhuma**. Com 1 raposa ficam 7,2 em média; com 30, o mínimo é 23 coelhos (antes 11).
+- Paisagem de 5×5, 20 seeds, 120 dias: nenhuma espécie chegou a 0; ≈290 coelhos e ≈7,4 raposas por região.
+- A versão longe volta a bater com a completa: 300 contra 306 coelhos.
+
+**Testes mudados de propósito** (cada um explica no código porquê):
+- Os testes da migração de segurança desligam as chegadas de fora, que encheriam a região antes dela; o teste de quem chega ao lado do jogador passou a ver também as que chegam de fora.
+- O teste do rasto do jogador conta só as raposas desmamadas, porque corre em março e uma cria na toca não pode fugir do cheiro.
+- No teste da cabana, com muita comida as raposas ficam lá (≈3500 h contra ≈600) e caçam os coelhos: já não se exige mais coelhos com muita comida do que com pouca, mas que as duas atraiam coelhos e que muita atraia mais raposas.
+- As margens da robustez listam todas as que falham de uma vez.
+- Novos: a cria a mamar fica na toca; quem parte vai para a margem e sai; quem parte como flutuante; as jovens dispersam; chegam raposas onde há lugar; a raposa pare de certeza na época.
+
+Os ficheiros guardados passaram à versão 7.
+
+---
+
 ## 2026-11-11 (quarta-feira, a fechar o dia)
 
 ### O Prototype 01 está completo e validado ✅

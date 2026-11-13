@@ -37,11 +37,44 @@ pub struct RabbitParams {
     /// (com 0.5 a população extinguia-se: ver DIARIO.md).
     pub min_food: f32,
     pub energy_per_biomass: f32,
+    /// A reprodução é um evento do calendário (relatório "Coelho a fundo",
+    /// B1–B3). A energia só serve de travão: abaixo disto não pare (com 70–80%
+    /// da ração, os coelhos param de criar, Boyd & Bray 1989).
     pub repro_threshold: f32,
+    /// Energia que o parto e a lactação custam à mãe.
     pub repro_cost: f32,
     pub newborn_energy: f32,
+    /// Ticks entre dois partos: um mês do calendário (72 ticks), a gestação
+    /// de ≈30 dias no relógio comprimido do ano de 36 dias.
     pub repro_cooldown: u64,
+    /// Probabilidade de parir em cada tick. Não é um número fixo: a
+    /// simulação põe-no em cada hora a partir da época de cria do mês
+    /// (`CalendarParams::rabbit_breed_chance` / ticks do mês). Fora disso é 0.
+    pub breed_per_tick: f32,
+    /// Crias por parto e por coelho: 1, e mais uma com esta probabilidade.
+    /// A ninhada real é de 3,5 (Villafuerte, verificado); como o jogo não
+    /// tem sexos, cada coelho conta metade: 1,75 em média.
+    pub litter_extra: f32,
+    /// Idade adulta: 4 meses no relógio comprimido (4 × 72 ticks), a do
+    /// coelho-bravo do sul (Villafuerte, verificado).
     pub maturity_ticks: u64,
+    /// Mortalidade dos jovens dependente da densidade de adultos (Calvete
+    /// 2006, verificado): d = 0,041 × D/K por dia real, para os jovens das 4
+    /// semanas aos 8 meses (≈67 a 576 ticks no relógio comprimido). Como esses
+    /// ≈212 dias reais cabem em 509 ticks, por tick daria 0,041 × 212 / 509 ≈
+    /// 0,017 × D/K. Mas o d de Calvete inclui todas as causas, também os
+    /// predadores, e no jogo as raposas já matam jovens à parte: com 0,017 a
+    /// predação contava duas vezes e os coelhos não chegavam para as raposas.
+    /// Fica 0,006, cerca de um terço (design: a parte que não é predação).
+    /// D são os adultos da região e K `adult_capacity` por cada 576 células
+    /// (24×24), o botão da compressão: com 300, o equilíbrio fica em ≈260
+    /// coelhos por região, como antes.
+    pub juvenile_from: u64,
+    pub juvenile_until: u64,
+    pub juvenile_mortality: f32,
+    pub adult_capacity: f32,
+    /// Seis anos no relógio comprimido. O recorde em liberdade é de 9,5 anos
+    /// (Peacock & Sinclair 2023, resumo); quase nenhum lá chega.
     pub max_age_ticks: u64,
     /// Até quantas células de distância vê uma raposa. A raposa vê mais longe,
     /// por isso às vezes chega perto antes de o coelho dar por ela.
@@ -102,14 +135,20 @@ impl Default for RabbitParams {
             half_saturation: 3.0,
             min_food: 1.5,
             energy_per_biomass: 8.0,
-            repro_threshold: 80.0,
+            repro_threshold: 60.0,
             repro_cost: 40.0,
             // Acima de `desperate_energy`, para as crias fugirem desde que nascem.
             // Com 30 (igual ao limiar) nasciam já "desesperadas" e não fugiam.
             newborn_energy: 35.0,
-            repro_cooldown: 24 * 5,
-            maturity_ticks: 24 * 10,
-            max_age_ticks: 24 * 120,
+            repro_cooldown: 72,
+            breed_per_tick: 0.0,
+            litter_extra: 0.75,
+            maturity_ticks: 4 * 72,
+            juvenile_from: 67,
+            juvenile_until: 8 * 72,
+            juvenile_mortality: 0.006,
+            adult_capacity: 300.0,
+            max_age_ticks: 6 * 864,
             vision: 3,
             night_vision: 2,
             player_hearing: 3,
@@ -152,7 +191,7 @@ impl Rabbit {
 
     /// Um tick de vida. `threats` são as posições das raposas e `player` a
     /// do jogador, se estiver no mapa: o coelho teme os dois.
-    /// Devolve uma cria se o coelho se reproduziu neste tick.
+    /// Devolve as crias, se o coelho pariu neste tick.
     pub fn act(
         &mut self,
         world: &mut World,
@@ -160,7 +199,7 @@ impl Rabbit {
         p: &RabbitParams,
         threats: &[(usize, usize)],
         player: Option<(usize, usize)>,
-    ) -> Option<Rabbit> {
+    ) -> Vec<Rabbit> {
         self.age += 1;
         self.cooldown = self.cooldown.saturating_sub(1);
         self.energy -= p.metabolism;
@@ -234,12 +273,15 @@ impl Rabbit {
         if self.age >= p.maturity_ticks
             && self.cooldown == 0
             && self.energy >= p.repro_threshold
+            && p.breed_per_tick > 0.0
+            && rng.next_f32() < p.breed_per_tick
         {
             self.energy -= p.repro_cost;
             self.cooldown = p.repro_cooldown;
-            return Some(Rabbit::newborn(self.x, self.y, p.newborn_energy));
+            let n = 1 + (rng.next_f32() < p.litter_extra) as usize;
+            return (0..n).map(|_| Rabbit::newborn(self.x, self.y, p.newborn_energy)).collect();
         }
-        None
+        Vec::new()
     }
 }
 

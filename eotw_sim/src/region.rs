@@ -19,6 +19,7 @@
 //! completa: o mesmo equilíbrio e a mesma recuperação depois de um choque.
 
 use serde::{Deserialize, Serialize};
+use crate::calendar::FoxPhase;
 use crate::fox::Fox;
 use crate::rabbit::Rabbit;
 use crate::resources::Resource;
@@ -27,7 +28,7 @@ use crate::sim::{far_from, Config, Simulation, TICKS_PER_DAY};
 use crate::world::{distance, World};
 
 /// O tamanho do mapa (24x24) onde as tabelas foram medidas.
-const REFERENCE_CELLS: f32 = 576.0;
+pub(crate) const REFERENCE_CELLS: f32 = 576.0;
 
 /// A maior média que o sorteio de Poisson faz de uma vez (ver `poisson`).
 const POISSON_CHUNK: f32 = 30.0;
@@ -41,66 +42,77 @@ const STREAM_FOXES: u64 = 4;
 const STREAM_SIM: u64 = 5;
 const STREAM_RESOURCES: u64 = 6;
 
+/// A distância de um coelho à toca mais perto, na completa (quantis medidos:
+/// 10 seeds, 5 momentos).
+const RABBIT_BURROW_DISTANCE: [(f32, f32); 6] = [(0.0, 0.0), (0.25, 1.0), (0.5, 2.0), (0.75, 3.0), (0.9, 4.0), (1.0, 7.0)];
+
+/// O ruído na ligação entre os coelhos e a erva comida, ao expandir: com
+/// mais ruído, a erva onde estão os coelhos fica mais perto da média. É um
+/// compromisso medido (20 seeds, 100 dias). Com 6, os coelhos expandidos
+/// ficam em erva a 0,18 da média, mais baixa do que os 0,5 da completa, mas
+/// as crias dos primeiros 10 dias (4096 contra 3988) e a população (+4%)
+/// batem com a completa. Com 20–40 a erva fica realista (0,4–0,6), mas as
+/// crias sobem 12–15% e a população 9–11%: a completa tem outro travão
+/// local (a competição perto das tocas) que esta ligação imita.
+const GRAZED_NOISE: f32 = 6.0;
+
 /// Tentativas para sortear uma célula longe do jogador.
 const SPAWN_TRIES: usize = 50;
 
 /// Os números do modelo agregado, medidos na simulação completa.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AggregateParams {
-    /// Nascimentos por coelho adulto por dia, pela reserva (a fração dos
-    /// coelhos com energia de `rest_cap` ou mais, ver `AggregateRegion::reserve`):
-    /// pares (reserva, taxa), medidos na simulação completa (20 seeds, 900
-    /// dias, com e sem choques); entre pontos interpola-se em linha reta. No
-    /// fim a tabela sobe até ao máximo possível: uma cria a cada
-    /// `repro_cooldown` (5 dias), ou seja 0,2 por dia.
-    ///
-    /// Com o descanso de noite, a vegetação deixou de chegar para prever as
-    /// crias: depois de um choque, com a mesma vegetação, havia o triplo. A
-    /// energia média também não chegava (sobe só de 44 para 49). O que as
-    /// prevê é quantos coelhos já passaram do descanso e estão a caminho de
-    /// `repro_threshold`.
-    ///
-    /// Com o abrigo das árvores, as tabelas das crias, da reserva e da fome
-    /// foram corrigidas pelo que se mediu na completa em equilíbrio. Os
-    /// coelhos juntam-se perto das árvores e comem lá mais a erva, por isso,
-    /// com a mesma vegetação média, morrem quase o dobro à fome (0,0012 por
-    /// dia com 5,0 de vegetação) e têm mais crias (0,0151 por adulto com 10%
-    /// de reserva). As crias foram multiplicadas por 1,16, a fome passou 0,93
-    /// para a direita e a reserva desceu 0,02.
-    pub births: Vec<(f32, f32)>,
-    /// A reserva para onde os coelhos caminham, pela erva por coelho (a
-    /// vegetação de toda a região a dividir pelos coelhos).
+    /// As crias dos coelhos seguem a regra da completa (ver `step_day`):
+    /// adultos × reserva × probabilidade do mês × crias por parto. Este fator
+    /// corrige o que a regra não vê (o intervalo entre partos, e que a
+    /// reserva é medida à meia-noite), medido na completa.
+    pub birth_factor: f32,
+    /// A reserva (a fração dos coelhos com energia de `rest_cap` ou mais, que
+    /// é também o travão do parto) para onde os coelhos caminham, pela erva
+    /// por coelho (a vegetação de toda a região a dividir pelos coelhos).
     pub reserve_target: Vec<(f32, f32)>,
     /// A fração da distância a `reserve_target` que a reserva anda por dia.
     /// Medido: depois de um choque passa de 15% para 28% em 4 dias.
     pub reserve_rate: f32,
-    /// Mortes por fome por coelho por dia, por vegetação média.
+    /// Mortes por fome por coelho por dia, por vegetação média (em UB, de 0 a
+    /// 100).
     pub hunger: Vec<(f32, f32)>,
-    /// Coelhos comidos por raposa por dia. Era 0,205; com o gasto e o êxito
-    /// reais da raposa, e os roedores, mediu-se 0,30 na completa (10 seeds,
-    /// 900 dias).
-    pub prey_per_fox: f32,
-    /// Crias por raposa por dia, pelo número de raposas em cada 24x24 de
-    /// região. Medido em cada região de 24x24 de mapas de 72x72, já em
-    /// equilíbrio (dias 500 a 1500): as raposas vivem 400 dias, por isso
-    /// antes disso ainda nenhuma morreu de velhice e a população ainda está
-    /// a subir.
+    /// Coelhos comidos por raposa por dia, pelos coelhos em cada 24x24 de
+    /// região: com mais coelhos, a raposa encontra mais (resposta funcional).
+    pub prey_per_fox: Vec<(f32, f32)>,
+    /// Corrige a mortalidade dos jovens pela densidade
+    /// (`RabbitParams::juvenile_mortality`). Na completa os coelhos juntam-se
+    /// perto das tocas e das melhores manchas de erva, por isso sentem a
+    /// densidade mais do que a média da região diz. Medido para a agregada
+    /// ter o mesmo equilíbrio que a completa: com 1 ficava com 383 coelhos
+    /// contra 278, com 1,4 com 271 (10 seeds, dias 500–900). Com a
+    /// dispersão das raposas, 1,4 dava 274 contra 306, e 1,25 dá 300.
+    pub juvenile_factor: f32,
+    /// Crias por raposa adulta e por ano, pelo número de raposas em cada
+    /// 24x24 de região (o travão de densidade, `FoxParams::rival_suppression`).
+    /// Nascem só na época das crias, repartidas pelos dias dela.
     pub fox_births: Vec<(f32, f32)>,
     /// Mortes de raposas à fome por raposa por dia, pelos coelhos por raposa.
-    /// Medido na completa (20 seeds, 40 dias depois de tirar 0 a 100% dos
-    /// coelhos), já sem a velhice (0,0022 por dia, que `age` trata). Os
-    /// roedores não chegam para a raposa viver só deles: sem coelhos morrem
-    /// cerca de um quarto por dia. A cauda foi cortada (a medição dava 0,066
-    /// com 10, 0,037 com 16 e 0,010 com 30): em equilíbrio há uns 23 coelhos
-    /// por raposa, e as mortes dessa altura já estão nas crias de
-    /// `fox_births`, que foram medidas em equilíbrio. Contá-las outra vez
-    /// baixava as raposas de 10 para 8,6 por região.
+    /// Com poucos coelhos por raposa (até 7) ficam os valores medidos antes,
+    /// tirando 0 a 100% dos coelhos (20 seeds, 40 dias): a energia, o
+    /// metabolismo e o valor de um coelho não mudaram. Os choques desta
+    /// medição raramente chegam abaixo de 12 coelhos por raposa.
     pub fox_hunger: Vec<(f32, f32)>,
-    /// Vegetação comida por coelho por dia com a vegetação de equilíbrio
-    /// (cerca de 4). Com menos vegetação comem menos, com a mesma resposta
-    /// funcional do coelho (`half_saturation`). A curva de crescimento diz que,
-    /// para a vegetação ficar em 3,85 com 283 coelhos, cada um come 3,46 por
-    /// dia; o ajuste à simulação completa deu 3,5.
+    /// Flutuantes que partem por raposa por dia (`FoxParams::floater_leave`:
+    /// partem as que têm fome e rivais a mais), pelos coelhos e depois pelas
+    /// raposas em cada 24x24 de região. Com poucos coelhos a caça custa e
+    /// partem ≈5,5% por dia, sejam quantas forem; com muitos coelhos, só
+    /// partem mais quando há muitas raposas. Por coelhos por raposa a
+    /// agregada guardava as raposas depois de um choque nos coelhos
+    /// (6,3 contra 4,3 na completa).
+    pub fox_leave: Vec<(f32, Vec<(f32, f32)>)>,
+    /// A estação das partidas: o mês (de janeiro a dezembro, no hemisfério
+    /// norte) multiplica `fox_leave`. Na primeira metade do ano partem o
+    /// dobro (as adultas com fome antes e durante a época das crias).
+    pub fox_leave_month: [f32; 12],
+    /// Erva comida por coelho por dia com erva à vontade, em UB (3,5 UB ≈
+    /// 70 g de matéria seca, Cooke 2014). Com pouca erva comem menos, com a
+    /// resposta funcional do coelho (`half_saturation`).
     pub grazing: f32,
     /// O que a conversão de volta para animais individuais sorteia, com as
     /// distribuições medidas na simulação completa (10 seeds, 5 momentos
@@ -115,10 +127,6 @@ pub struct AggregateParams {
     /// como as outras: com o descanso ao meio-dia, a essa hora há poucos
     /// (5%; era 24% com o descanso de noite).
     pub rabbits_in_burrows: f32,
-    /// Fração dos coelhos e das raposas que acabou de ter uma cria e ainda
-    /// espera para a próxima (`repro_cooldown`).
-    pub rabbits_waiting: f32,
-    pub foxes_waiting: f32,
     /// Fração das raposas saciadas (`satiety_ticks`).
     pub foxes_satiated: f32,
     /// Fração dos coelhos e das raposas de uma região que passa para a
@@ -134,111 +142,118 @@ pub struct AggregateParams {
 
 impl Default for AggregateParams {
     fn default() -> Self {
+        // Medido na completa (24x24, 20 seeds, 900 dias depois do aquecimento,
+        // com choques de −80% e −95% dos coelhos em metade das seeds; fase 1
+        // da recalibração, novembro de 2026; de novo com a dispersão das
+        // raposas). Ver `medir_tabelas`.
         Self {
-            births: vec![
-                (0.03, 0.0063),
-                (0.05, 0.0094),
-                (0.07, 0.0116),
-                (0.09, 0.0137),
-                (0.11, 0.0155),
-                (0.13, 0.0168),
-                (0.15, 0.0184),
-                (0.17, 0.0212),
-                (0.19, 0.0251),
-                (0.21, 0.0327),
-                (0.23, 0.0435),
-                (0.25, 0.0644),
-                (0.27, 0.0813),
-                (0.29, 0.0883),
-                (0.31, 0.1052),
-                (0.35, 0.1169),
-                (0.50, 0.2000),
-            ],
+            birth_factor: 0.89,
             reserve_target: vec![
-                (5.0, 0.11),
-                (10.0, 0.10),
-                (14.0, 0.20),
-                (18.0, 0.27),
-                (24.0, 0.32),
-                (35.0, 0.35),
+                (43.0, 0.55),
+                (61.0, 0.58),
+                (75.0, 0.58),
+                (90.0, 0.59),
+                (119.0, 0.62),
+                (230.0, 0.64),
+                (701.0, 0.62),
+                (5400.0, 0.63),
             ],
             reserve_rate: 0.3,
+            // Abaixo de 23 UB fica o ponto medido antes (com mais erva comida).
             hunger: vec![
-                (3.430, 0.0300),
-                (3.805, 0.0118),
-                (4.055, 0.0074),
-                (4.305, 0.0048),
-                (4.555, 0.0030),
-                (4.805, 0.0016),
-                (5.055, 0.0010),
-                (5.305, 0.0008),
-                (5.555, 0.0005),
-                (5.805, 0.0003),
-                (6.055, 0.0002),
-                (6.430, 0.0001),
-                (6.930, 0.0000),
+                (14.2, 0.0048),
+                (23.0, 0.0020),
+                (29.5, 0.0023),
+                (33.6, 0.0020),
+                (37.0, 0.0016),
+                (40.1, 0.0020),
+                (43.6, 0.0017),
+                (48.1, 0.0014),
+                (54.2, 0.0011),
+                (63.5, 0.0003),
+                (74.9, 0.0002),
+                (86.3, 0.0007),
+                (95.7, 0.0002),
+                (98.5, 0.0),
             ],
-            prey_per_fox: 0.30,
+            prey_per_fox: vec![
+                (14.7, 0.151),
+                (51.4, 0.255),
+                (115.9, 0.276),
+                (184.7, 0.273),
+                (221.1, 0.278),
+                (252.5, 0.277),
+                (284.8, 0.273),
+                (318.3, 0.284),
+                (355.3, 0.293),
+                (415.1, 0.304),
+            ],
+            juvenile_factor: 1.25,
             fox_births: vec![
-                // Sozinha: sem rivais, tem uma cria logo que pode (uma a cada
-                // `repro_cooldown`, 20 dias). Com companhia, a taxa medida.
-                // Com 2 raposas ainda é a medição antiga, num mapa de 24x24:
-                // em equilíbrio quase nenhuma região fica com tão poucas.
-                (1.0, 0.05),
-                (2.0, 0.0039),
-                (4.0, 0.0077),
-                (6.0, 0.0059),
-                (7.0, 0.0053),
-                (8.0, 0.0042),
-                (9.0, 0.0031),
-                (10.0, 0.0029),
-                (11.0, 0.0022),
-                (12.0, 0.0021),
-                (13.0, 0.0016),
-                (14.0, 0.0014),
-                (15.5, 0.0011),
-                (17.5, 0.0008),
+                (1.6, 2.18),
+                (3.1, 1.76),
+                (4.0, 1.42),
+                (5.0, 1.23),
+                (5.5, 1.22),
+                (6.0, 1.17),
+                (6.9, 1.19),
+                (8.2, 0.98),
+                (10.3, 0.63),
             ],
+            // Abaixo de 5 coelhos por raposa ficam os valores medidos antes.
             fox_hunger: vec![
                 (1.0, 0.24),
                 (3.0, 0.18),
-                (5.0, 0.14),
-                (7.0, 0.12),
-                (10.0, 0.09),
-                (13.0, 0.0),
+                (5.1, 0.060),
+                (13.0, 0.0164),
+                (19.7, 0.0040),
+                (24.3, 0.0021),
+                (28.2, 0.0021),
+                (32.4, 0.0024),
+                (36.9, 0.0015),
+                (42.5, 0.0014),
+                (50.8, 0.0011),
+                (77.7, 0.0011),
+                (348.0, 0.0),
             ],
-            grazing: 3.3,
+            fox_leave: vec![
+                (50.0, vec![(3.0, 0.035), (5.5, 0.027), (7.5, 0.023)]),
+                (150.0, vec![(3.0, 0.016), (5.5, 0.011), (7.5, 0.012), (9.7, 0.011), (13.0, 0.008)]),
+                (250.0, vec![(3.0, 0.007), (5.5, 0.008), (7.5, 0.008), (9.7, 0.009), (13.0, 0.009)]),
+                (350.0, vec![(3.0, 0.008), (5.5, 0.009), (7.5, 0.010), (9.7, 0.009), (13.0, 0.012)]),
+                (500.0, vec![(5.5, 0.007), (7.5, 0.008), (9.7, 0.011), (13.0, 0.017)]),
+            ],
+            fox_leave_month: [1.25, 1.5, 1.25, 1.33, 1.42, 1.25, 0.67, 0.75, 0.75, 0.67, 0.67, 0.58],
+            grazing: 3.40,
             biomass_spread: vec![
-                (0.0, 0.25),
-                (0.1, 0.44),
-                (0.25, 0.57),
-                (0.5, 0.86),
-                (0.75, 1.32),
-                (0.9, 1.79),
-                (1.0, 2.6),
+                (0.0, 0.015),
+                (0.1, 0.065),
+                (0.25, 0.35),
+                (0.5, 1.03),
+                (0.75, 1.39),
+                (0.9, 1.99),
+                (1.0, 5.51),
             ],
             rabbit_energy: vec![
-                (0.0, 1.0),
-                (0.1, 23.2),
-                (0.25, 29.7),
-                (0.5, 38.0),
-                (0.75, 52.2),
-                (0.9, 61.3),
-                (1.0, 91.5),
+                (0.0, 0.1),
+                (0.1, 29.8),
+                (0.25, 38.9),
+                (0.5, 71.4),
+                (0.75, 90.7),
+                (0.9, 91.5),
+                (1.0, 92.3),
             ],
             fox_energy: vec![
-                (0.0, 17.6),
-                (0.1, 56.2),
-                (0.25, 69.7),
-                (0.5, 79.8),
-                (0.75, 89.6),
-                (0.9, 92.5),
+                (0.0, 0.7),
+                (0.1, 40.0),
+                (0.25, 61.2),
+                (0.5, 75.2),
+                (0.75, 89.2),
+                (0.9, 92.4),
                 (1.0, 100.0),
             ],
-            rabbits_in_burrows: 0.05,
-            rabbits_waiting: 0.06,
-            foxes_waiting: 0.15,
-            foxes_satiated: 0.27,
+            rabbits_in_burrows: 0.133,
+            foxes_satiated: 0.26,
             rabbits_cross: 0.023,
             foxes_cross: 0.0029,
         }
@@ -259,6 +274,13 @@ fn lookup(table: &[(f32, f32)], x: f32) -> f32 {
     let (x0, y0) = table[i - 1];
     let (x1, y1) = table[i];
     y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+}
+
+/// Uma tabela de duas entradas: por `x`, linhas de (y, valor). Interpola em
+/// `y` dentro das duas linhas mais perto de `x` e depois entre elas.
+fn lookup2(table: &[(f32, Vec<(f32, f32)>)], x: f32, y: f32) -> f32 {
+    let rows: Vec<(f32, f32)> = table.iter().map(|(tx, row)| (*tx, lookup(row, y))).collect();
+    lookup(&rows, x)
 }
 
 /// Numa tabela de (fração, valor) como `rabbit_energy`, a fração dos
@@ -300,6 +322,12 @@ pub struct AggregateRegion {
     /// As células de rio: terreno, como as tocas. Não contam em `cells`.
     pub water: Vec<(usize, usize)>,
     pub day: u64,
+    /// Dias seguidos com menos coelhos e raposas do que o mínimo da migração
+    /// de segurança (`MigrationParams`), como na completa.
+    #[serde(default)]
+    rabbit_low_days: u64,
+    #[serde(default)]
+    fox_low_days: u64,
     config: Config,
     params: AggregateParams,
     rng: Rng,
@@ -329,6 +357,8 @@ impl AggregateRegion {
             resources,
             water: Vec::new(),
             day: 0,
+            rabbit_low_days: 0,
+            fox_low_days: 0,
             config,
             params,
             rng: Rng::new(seed),
@@ -462,35 +492,70 @@ impl AggregateRegion {
         }
         let water = &self.water;
         let clear = &|cell: (usize, usize)| clear(cell) && !water.contains(&cell);
-        let spread: Vec<f32> = (0..w * h).map(|_| lookup(&p.biomass_spread, rng.next_f32())).collect();
-        let mut scale = self.biomass / (spread.iter().sum::<f32>() / (w * h) as f32);
-        // As células que passariam da capacidade ficam nela e a média desce
-        // um pouco; umas voltas a corrigir a escala chegam para a acertar.
-        for _ in 0..5 {
-            for (i, s) in spread.iter().enumerate() {
-                world.set_biomass(i % w, i / w, s * scale);
-            }
-            let mean = world.mean_biomass();
-            if mean <= 0.0 || (mean - self.biomass).abs() < 1e-4 {
-                break;
-            }
-            scale *= self.biomass / mean;
-        }
-
         let mut rng = stream(STREAM_RABBITS);
         let hidden: Vec<(usize, usize)> =
-            world.burrows().iter().copied().filter(|&b| clear(b)).collect();
+            self.burrows.iter().copied().filter(|&b| clear(b)).collect();
         let mut rabbits = Vec::with_capacity(self.rabbit_count() as usize);
         for (days, &n) in self.rabbits.iter().enumerate() {
             for _ in 0..n {
                 let (x, y) = if !hidden.is_empty() && rng.next_f32() < p.rabbits_in_burrows {
                     hidden[rng.range_usize(hidden.len())]
+                } else if !hidden.is_empty() {
+                    // Perto de uma toca, como na completa: metade a 2 células
+                    // ou menos, 90% a 4 ou menos (medido; uma célula ao acaso
+                    // fica a 3 de mediana).
+                    let toca = hidden[rng.range_usize(hidden.len())];
+                    let r = lookup(&RABBIT_BURROW_DISTANCE, rng.next_f32()).round() as usize;
+                    near_cell(&mut rng, w, h, toca, r, clear)
                 } else {
                     far_cell(&mut rng, w, h, clear)
                 };
                 rabbits.push(self.new_rabbit(&mut rng, days, (x, y)));
             }
         }
+
+        // A erva: os valores de `biomass_spread`, mas com menos onde há
+        // coelhos perto, porque na completa eles comem onde vivem (medido: a
+        // erva onde estão os coelhos é ≈0,5 da média). Sem isto, os coelhos
+        // expandidos começavam em erva fresca e tinham 28% mais crias nos
+        // primeiros 10 dias. Ver `GRAZED_NOISE`.
+        let mut spread: Vec<f32> = (0..w * h).map(|_| lookup(&p.biomass_spread, rng.next_f32())).collect();
+        spread.sort_by(|a, b| a.total_cmp(b));
+        let mut near = vec![0.0f32; w * h];
+        for r in &rabbits {
+            near[r.y * w + r.x] += 2.0;
+            for (nx, ny) in world.neighbors(r.x, r.y).into_iter().flatten() {
+                near[ny * w + nx] += 1.0;
+            }
+        }
+        let mut order: Vec<(f32, usize)> =
+            (0..w * h).map(|i| (near[i] + rng.next_f32() * GRAZED_NOISE, i)).collect();
+        order.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut by_cell = vec![0.0f32; w * h];
+        for (k, &(_, i)) in order.iter().enumerate() {
+            by_cell[i] = spread[k];
+        }
+        let spread = by_cell;
+        // As células que passariam da capacidade ficam nela, e a média fica
+        // abaixo do pedido: procura-se a escala por bisseção (a média sobe
+        // com a escala). Com a capacidade a 100 há muitas células no máximo,
+        // e as 5 voltas da correção proporcional de antes não chegavam.
+        let fill = |world: &mut World, scale: f32| {
+            for (i, s) in spread.iter().enumerate() {
+                world.set_biomass(i % w, i / w, s * scale);
+            }
+            world.mean_biomass()
+        };
+        let (mut lo, mut hi) = (0.0f32, c.vegetation.capacity / spread.iter().copied().fold(f32::MAX, f32::min).max(1e-3));
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if fill(&mut world, mid) < self.biomass {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        fill(&mut world, 0.5 * (lo + hi));
 
         // As raposas ficam umas perto das outras, como na completa, onde
         // todas sobem os mesmos gradientes de cheiro e quase nenhuma está sem
@@ -525,7 +590,12 @@ impl AggregateRegion {
         let f = if rng.next_f32() < self.reserve { below + (1.0 - below) * u } else { below * u };
         let mut r = Rabbit::newborn(x, y, lookup(&p.rabbit_energy, f));
         r.age = some_hour_of(rng, days).min(c.rabbit.max_age_ticks);
-        if rng.next_f32() < p.rabbits_waiting {
+        // Quem pariu no último mês ainda espera (`repro_cooldown` = um mês):
+        // a probabilidade de parir este mês, para os adultos com energia que
+        // chegue. Depende do mês, por isso não é uma média do ano.
+        let month = c.calendar.date(self.day * TICKS_PER_DAY).month;
+        let bred = c.calendar.rabbit_breed_chance(month) * self.reserve;
+        if r.age >= c.rabbit.maturity_ticks && rng.next_f32() < bred {
             r.cooldown = 1 + rng.range_usize(c.rabbit.repro_cooldown as usize) as u64;
         }
         r
@@ -536,13 +606,30 @@ impl AggregateRegion {
         let (c, p) = (&self.config, &self.params);
         let mut f = Fox::newborn(x, y, lookup(&p.fox_energy, rng.next_f32()));
         f.age = some_hour_of(rng, days).min(c.fox.max_age_ticks);
-        if rng.next_f32() < p.foxes_waiting {
-            f.cooldown = 1 + rng.range_usize(c.fox.repro_cooldown as usize) as u64;
+        // A espera pela ninhada seguinte depende de há quanto tempo começou a
+        // época das crias: logo antes dela quase nenhuma espera, logo depois
+        // quase todas. Uma média do ano (0,33) punha a esperar, antes da
+        // época, raposas que na completa ainda iam criar.
+        if f.age >= c.fox.maturity_ticks {
+            if let Some(since) = self.ticks_since_cub_season() {
+                // O parto cai numa hora ao acaso da época (`fox_breed_chance`).
+                let season = c.calendar.fox_cub_season_ticks();
+                let tried = since.min(season) as f32 / season as f32;
+                if since < c.fox.repro_cooldown && rng.next_f32() < tried {
+                    let when = rng.range_usize(since.min(season) as usize + 1) as u64;
+                    f.cooldown = (c.fox.repro_cooldown - since + when).max(1);
+                }
+            }
         }
         if rng.next_f32() < p.foxes_satiated {
             f.satiety = 1 + rng.range_usize(c.fox.satiety_ticks as usize) as u64;
         }
         f
+    }
+
+    /// Ticks desde o início da última época das crias das raposas.
+    fn ticks_since_cub_season(&self) -> Option<u64> {
+        self.config.calendar.ticks_since_fox_cub_season(self.day * TICKS_PER_DAY)
     }
 
     pub fn rabbit_count(&self) -> u32 {
@@ -564,47 +651,99 @@ impl AggregateRegion {
         let r = self.rabbit_count() as f32;
         let f = self.fox_count() as f32;
 
-        // Vegetação: o crescimento de um dia (a mesma curva logística da
-        // simulação completa, 24 vezes) menos o que os coelhos comem.
+        // Vegetação: o crescimento de um dia (a mesma função da simulação
+        // completa, 24 vezes, com o mês) menos o que os coelhos comem.
         let veg = &self.config.vegetation;
+        let m = self.config.calendar.grass(month);
         let mut grown = b;
         for _ in 0..TICKS_PER_DAY {
-            let room = 1.0 - grown / veg.capacity;
-            grown += (veg.regrowth * grown + veg.seed_growth * veg.capacity) * room;
+            grown = crate::world::grass_step(grown, veg, m);
         }
-        // Os coelhos comem o que precisam, mas não mais do que a erva acima de
-        // `min_food` (abaixo disso já não vale a pena comer, como na completa).
-        let half = self.config.rabbit.half_saturation;
-        let appetite = p.grazing * (b / (b + half)) / (4.0 / (4.0 + half));
-        let edible = (grown - self.config.rabbit.min_food).max(0.0) * self.cells as f32;
+        // Os coelhos comem o que precisam (`grazing` com erva à vontade, menos
+        // com pouca, com a resposta funcional do coelho), mas não mais do que
+        // a erva acima de `min_food` (abaixo disso já não vale a pena comer).
+        let rp = self.config.rabbit.clone();
+        let appetite = p.grazing * b / (b + rp.half_saturation);
+        let edible = (grown - rp.min_food).max(0.0) * self.cells as f32;
         let eaten = (appetite * r).min(edible) / self.cells as f32;
         self.biomass = (grown - eaten).clamp(0.0, veg.capacity);
 
-        // Coelhos: nascimentos (só dos adultos), fome, caça e velhice.
-        let rabbit_adults = adults(&self.rabbits, self.config.rabbit.maturity_ticks) as f32;
-        let births = self.poisson(rabbit_adults * lookup(&p.births, self.reserve));
+        // Coelhos. As crias seguem a mesma regra da completa: cada adulto com
+        // energia que chegue (a reserva) pare com a probabilidade do mês, e
+        // cada parto dá 1 + `litter_extra` crias. `birth_factor` corrige o
+        // que a regra não vê (o intervalo entre partos), medido na completa.
+        let calendar = &self.config.calendar;
+        let breed = calendar.rabbit_breed_chance(month) / calendar.days_per_month as f32;
+        let rabbit_adults = adults(&self.rabbits, rp.maturity_ticks) as f32;
+        let births = self.poisson(rabbit_adults * self.reserve * breed * (1.0 + rp.litter_extra) * p.birth_factor);
         if r > 0.0 {
             let grass_per_rabbit = b * self.cells as f32 / r;
             self.reserve += p.reserve_rate * (lookup(&p.reserve_target, grass_per_rabbit) - self.reserve);
         }
         let hunger_rate = lookup(&p.hunger, b);
         self.remove_rabbits_at_random(hunger_rate);
-        let hunted = self.poisson(f * p.prey_per_fox);
+        // A mortalidade dos jovens pela densidade de adultos, como na completa.
+        let capacity = rp.adult_capacity * self.cells as f32 / REFERENCE_CELLS;
+        let per_tick = (rp.juvenile_mortality * p.juvenile_factor * rabbit_adults / capacity).min(1.0);
+        let per_day = 1.0 - (1.0 - per_tick).powi(TICKS_PER_DAY as i32);
+        let (from, until) = (rp.juvenile_from, rp.juvenile_until);
+        self.remove_by_age(false, |age| if (from..until).contains(&age) { per_day } else { 0.0 });
+        let hunted = self.poisson(f * lookup(&p.prey_per_fox, r * REFERENCE_CELLS / self.cells as f32));
         self.remove_rabbits_count(hunted);
         age(&mut self.rabbits, births);
 
-        // Raposas: crias (menos quando são mais), fome e velhice. A fome
-        // depende dos coelhos que há por raposa (`fox_hunger`).
-        // A tabela foi medida num mapa de 24x24, por isso conta raposas por
-        // cada 24x24 de região: pelo número absoluto, uma região de 48x48
-        // parecia sobrelotada e ficava com 18 raposas em vez de 34.
+        // Raposas. Crias só na época delas (`FoxPhase::CriasNaToca`),
+        // repartidas pelos dias dessa época; quantas por adulto e por ano vem
+        // de `fox_births`, pela densidade (o travão). A tabela foi medida num
+        // mapa de 24x24, por isso conta raposas por cada 24x24 de região.
+        let fp = self.config.fox.clone();
         let density = f * REFERENCE_CELLS / self.cells as f32;
-        let cubs = self.poisson(f * lookup(&p.fox_births, density));
+        let calendar = &self.config.calendar;
+        let cub_days = (0..12).filter(|&mo| calendar.fox_phase(mo) == FoxPhase::CriasNaToca).count() as f32
+            * calendar.days_per_month as f32;
+        let cubs = if calendar.fox_phase(month) == FoxPhase::CriasNaToca {
+            let fox_adults = adults(&self.foxes, fp.maturity_ticks) as f32;
+            self.poisson(fox_adults * lookup(&p.fox_births, density) / cub_days)
+        } else {
+            0
+        };
         let fox_hunger = if f > 0.0 { lookup(&p.fox_hunger, r / f) } else { 0.0 };
         if fox_hunger > 0.0 {
             self.remove_foxes_at_random(fox_hunger);
         }
+        // A dispersão, como na completa: as flutuantes com fome partem, as
+        // jovens partem na época delas, e chegam de fora tanto mais quanto
+        // mais lugar houver.
+        if f > 0.0 {
+            let rabbit_density = r * REFERENCE_CELLS / self.cells as f32;
+            let season = p.fox_leave_month[self.config.calendar.northern(month)];
+            self.remove_foxes_at_random(lookup2(&p.fox_leave, rabbit_density, density) * season);
+        }
+        let disperse = 1.0 - (1.0 - self.config.calendar.fox_dispersal_chance(month)).powi(TICKS_PER_DAY as i32);
+        let (weaned, juvenile) = (fp.lactation_ticks, fp.juvenile_ticks);
+        self.remove_by_age(true, |age| if (weaned..juvenile).contains(&age) { disperse } else { 0.0 });
+        if self.day >= self.config.foxes_arrive_day {
+            let area = self.cells as f32 / REFERENCE_CELLS;
+            let per_tick = crate::sim::immigration_per_tick(&fp, &self.config.calendar, self.fox_count() as f32, area);
+            let arrivals = self.poisson(per_tick * TICKS_PER_DAY as f32);
+            let age = crate::sim::immigrant_age(&self.config.calendar, &fp, self.day * TICKS_PER_DAY);
+            for _ in 0..arrivals {
+                self.add_fox(age);
+            }
+        }
+        // A mortalidade de fundo por idade, como na completa.
+        self.remove_by_age(true, |age| {
+            let s = if age < fp.cub_ticks {
+                fp.cub_survival
+            } else if age < fp.juvenile_ticks {
+                fp.juvenile_survival
+            } else {
+                fp.adult_survival
+            };
+            1.0 - s.powi(TICKS_PER_DAY as i32)
+        });
         age(&mut self.foxes, cubs);
+        self.safety_migration();
         if self.day == self.config.foxes_arrive_day {
             self.foxes_arrive();
         }
@@ -650,6 +789,57 @@ impl AggregateRegion {
                 }
             }
             *c = kept;
+        }
+    }
+
+    /// A migração de segurança (GDD 18.6), como na completa: se uma espécie
+    /// fica abaixo do mínimo `days_below` dias seguidos, chega um adulto. Na
+    /// completa as raposas só contam depois de chegarem (`foxes_arrive_day`).
+    fn safety_migration(&mut self) {
+        let m = self.config.migration.clone();
+        if (self.rabbit_count() as usize) < m.min_rabbits {
+            self.rabbit_low_days += 1;
+        } else {
+            self.rabbit_low_days = 0;
+        }
+        if m.min_rabbits > 0 && self.rabbit_low_days >= m.days_below {
+            self.rabbit_low_days = 0;
+            self.add_rabbit(self.config.rabbit.maturity_ticks);
+        }
+        let arrived = self.day >= self.config.foxes_arrive_day;
+        if arrived && (self.fox_count() as usize) < m.min_foxes {
+            self.fox_low_days += 1;
+        } else {
+            self.fox_low_days = 0;
+        }
+        if m.min_foxes > 0 && self.fox_low_days >= m.days_below {
+            self.fox_low_days = 0;
+            self.add_fox(self.config.fox.maturity_ticks);
+        }
+    }
+
+    /// Retira, de cada idade (em dias), com a probabilidade que `rate` dá
+    /// para essa idade em ticks (o meio do dia). `foxes` escolhe a espécie.
+    fn remove_by_age(&mut self, foxes: bool, rate: impl Fn(u64) -> f32) {
+        let cohorts = if foxes { std::mem::take(&mut self.foxes) } else { std::mem::take(&mut self.rabbits) };
+        let mut out = cohorts.clone();
+        for (days, c) in out.iter_mut().enumerate() {
+            let p = rate(days as u64 * TICKS_PER_DAY + TICKS_PER_DAY / 2);
+            if p <= 0.0 {
+                continue;
+            }
+            let mut kept = 0;
+            for _ in 0..*c {
+                if self.rng.next_f32() >= p {
+                    kept += 1;
+                }
+            }
+            *c = kept;
+        }
+        if foxes {
+            self.foxes = out;
+        } else {
+            self.rabbits = out;
         }
     }
 
@@ -814,7 +1004,6 @@ mod tests {
     #[test]
     fn a_agregada_tem_o_mesmo_equilibrio_que_a_completa() {
         let (c, a) = medias(10, 24, 500..900);
-        eprintln!("MEDIAS {c:?} {a:?}");
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(c[0], a[0], 0.08), "coelhos: completa {:.0}, agregada {:.0}", c[0], a[0]);
         assert!(perto(c[1], a[1], 0.25), "raposas: completa {:.1}, agregada {:.1}", c[1], a[1]);
@@ -826,7 +1015,8 @@ mod tests {
     /// de 48x48 ficava com 18 raposas em vez de 34.
     #[test]
     fn uma_regiao_maior_tem_o_mesmo_equilibrio() {
-        let (c, a) = medias(4, 48, 500..900);
+        // 8 seeds (eram 4): com a cria por estações a média de 4 é ruído demais.
+        let (c, a) = medias(8, 48, 500..900);
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(c[0], a[0], 0.10), "coelhos: completa {:.0}, agregada {:.0}", c[0], a[0]);
         assert!(perto(c[1], a[1], 0.25), "raposas: completa {:.1}, agregada {:.1}", c[1], a[1]);
@@ -848,12 +1038,18 @@ mod tests {
     }
 
     /// Um choque que o modelo nunca viu ao ser ajustado: metade dos coelhos
-    /// desaparece. Nas duas simulações, ao fim de 21 dias já recuperaram.
+    /// desaparece, já em equilíbrio. Um ano depois (36 dias), as duas
+    /// simulações já recuperaram parte, e da mesma maneira. Antes o choque
+    /// era logo depois do aquecimento e media 21 dias; com a cria por
+    /// estações, esses 21 dias iam de março a outubro, com o verão sem crias
+    /// pelo meio. Medido: 295 antes, 218 na completa e 200 na agregada.
     #[test]
     fn a_agregada_recupera_de_um_choque_como_a_completa() {
-        let (mut completa, mut agregada) = (0.0, 0.0);
+        let (mut antes, mut completa, mut agregada) = (0.0, 0.0, 0.0);
         for seed in 1..=10 {
             let mut sim = aquecida(seed);
+            sim.run_days(500);
+            antes += sim.rabbits.len() as f32;
             let mut r = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed);
             let mut k = 0;
             sim.rabbits.retain(|_| {
@@ -861,15 +1057,16 @@ mod tests {
                 k % 2 == 0
             });
             r.remove_rabbits_count(r.rabbit_count() / 2);
-            sim.run_days(21);
-            for _ in 0..21 {
+            sim.run_days(36);
+            for _ in 0..36 {
                 r.step_day();
             }
             completa += sim.rabbits.len() as f32;
             agregada += r.rabbit_count() as f32;
         }
-        let (completa, agregada) = (completa / 10.0, agregada / 10.0);
-        assert!(completa > 250.0 && agregada > 250.0, "completa {completa:.0}, agregada {agregada:.0}");
+        let (antes, completa, agregada) = (antes / 10.0, completa / 10.0, agregada / 10.0);
+        let recuperou = |x: f32| x > 0.6 * antes;
+        assert!(recuperou(completa) && recuperou(agregada), "antes {antes:.0}, completa {completa:.0}, agregada {agregada:.0}");
         assert!((completa - agregada).abs() < 0.15 * completa, "completa {completa:.0}, agregada {agregada:.0}");
     }
 
@@ -954,7 +1151,10 @@ mod tests {
         let jogador = Some((12, 12));
         let (mut completa, mut expandida) = ([0.0f32; 2], [0.0f32; 2]);
         let mut crias = [0; 2];
-        for seed in 1..=10 {
+        let mut migracoes = 0;
+        // 20 seeds: com a cria por estações a população varia muito mais, e
+        // com 10 a média de uma só seed (+82% na seed 4) bastava para falhar.
+        for seed in 1..=20 {
             let mut sim = aquecida(seed);
             let mut volta = AggregateRegion::from_simulation(&sim, AggregateParams::default(), seed).expand(jogador, 0);
             sim.place_player(jogador);
@@ -971,11 +1171,197 @@ mod tests {
             }
             crias[0] += sim.stats[antes..antes + 25].iter().map(|d| d.fox_births).sum::<usize>();
             crias[1] += volta.stats[..25].iter().map(|d| d.fox_births).sum::<usize>();
-            assert_eq!(volta.migrations_rabbits + volta.migrations_foxes, 0, "seed {seed}: migração");
+            migracoes += volta.migrations_rabbits + volta.migrations_foxes;
         }
+        // Com ≈7 raposas por região e uma ninhada por ano, uma região pode
+        // perder as raposas por acaso (na seed 16, uma vez em 100 dias, sem
+        // a completa precisar). Antes exigia-se zero em 10 seeds; agora no
+        // máximo uma em 20.
+        assert!(migracoes <= 1, "{migracoes} migrações em 20 seeds");
         let perto = |x: f32, y: f32, tol: f32| (x - y).abs() <= tol * x;
         assert!(perto(completa[0], expandida[0], 0.08), "coelhos: completa {}, expandida {}", completa[0], expandida[0]);
         assert!(perto(completa[1], expandida[1], 0.25), "raposas: completa {}, expandida {}", completa[1], expandida[1]);
         assert!(crias[1] <= 2 * crias[0].max(5), "crias de raposa nos primeiros 25 dias: completa {}, expandida {}", crias[0], crias[1]);
+    }
+}
+/// Mede as tabelas de `AggregateParams` na simulação completa. Correr com
+/// `cargo test --release -p eotw_sim medir_tabelas -- --ignored --nocapture`
+/// depois de mudar o coelho, a raposa ou a erva.
+#[cfg(test)]
+mod medir_tabelas {
+    use super::*;
+
+    fn quantis(mut v: Vec<f32>, qs: &[f32]) -> Vec<(f32, f32)> {
+        v.sort_by(|a, b| a.total_cmp(b));
+        qs.iter().map(|&q| (q, v[((v.len() - 1) as f32 * q) as usize])).collect()
+    }
+
+    /// Agrupa (x, num, den) em `n` caixas com o mesmo número de pontos e dá
+    /// (x médio, Σnum/Σden).
+    fn tabela(mut pts: Vec<(f32, f32, f32)>, n: usize) -> Vec<(f32, f32)> {
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        pts.chunks((pts.len() / n).max(1))
+            .map(|c| {
+                let x = c.iter().map(|p| p.0).sum::<f32>() / c.len() as f32;
+                let num: f32 = c.iter().map(|p| p.1).sum();
+                let den: f32 = c.iter().map(|p| p.2).sum();
+                (x, num / den.max(1e-9))
+            })
+            .collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn medir() {
+        let mut birth_num = 0.0f32;
+        let mut birth_den = 0.0f32;
+        let (mut reserve_pts, mut hunger_pts, mut fox_hunger_pts, mut fox_birth_pts) = (vec![], vec![], vec![], vec![]);
+        let mut prey_pts = vec![];
+        let mut leave_pts: Vec<(f32, f32, f32)> = vec![];
+        let mut leave_month = [(0.0f32, 0.0f32); 12];
+        let (mut emig, mut immig, mut flo) = (0.0f32, 0.0f32, 0.0f32);
+        let mut fox_hunger_pts_dens: Vec<(f32, f32, f32)> = vec![];
+        let (mut pred, mut fox_days) = (0.0f32, 0.0f32);
+        let (mut young_hunger_num, mut young_hunger_den, mut adult_hunger_num, mut adult_hunger_den) = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let (mut eaten_num, mut eaten_den) = (0.0f32, 0.0f32);
+        let (mut spread, mut re, mut fe) = (vec![], vec![], vec![]);
+        let (mut burrow, mut rwait, mut fwait, mut fsat, mut rn, mut fn_) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+        let lado: usize = std::env::var("LADO").ok().and_then(|v| v.parse().ok()).unwrap_or(24);
+        let seeds: u64 = if lado > 24 { 8 } else { 20 };
+        for seed in 1..=seeds {
+            let mut config = Config { seed, ..Config::default() };
+            crate::sweep::sized_map(&mut config, lado);
+            config.initial_foxes = (config.initial_foxes * lado * lado / 576).max(1);
+            let mut sim = Simulation::warmed_up(config);
+            let c = sim.config().clone();
+            let cells = sim.world.land_cells() as f32;
+            let mut ct_start: Option<(f32, f32, usize)> = None;
+            for day in 0..900u64 {
+                // Choques em algumas seeds, para ver poucos coelhos por raposa.
+                if seed % 4 == 0 && day % 150 == 100 {
+                    let keep = sim.rabbits.len() / 5;
+                    sim.rabbits.truncate(keep);
+                }
+                if seed % 4 == 2 && day % 150 == 100 {
+                    let keep = sim.rabbits.len() / 20;
+                    sim.rabbits.truncate(keep);
+                }
+                let month = sim.date().month;
+                let b0 = sim.world.mean_biomass();
+                let r0 = sim.rabbits.len() as f32;
+                let f0 = sim.foxes.len() as f32;
+                let ad = sim.rabbits.iter().filter(|r| r.age >= c.rabbit.maturity_ticks).count() as f32;
+                let reserve = if r0 > 0.0 { sim.rabbits.iter().filter(|r| r.energy >= c.rabbit.rest_cap).count() as f32 / r0 } else { 0.0 };
+                let fox_ad = sim.foxes.iter().filter(|f| f.age >= c.fox.maturity_ticks).count() as f32;
+                let ct = c.calendar.fox_phase(month) == FoxPhase::CriasNaToca;
+                // Crescimento da erva neste dia, sem coelhos.
+                let m = c.calendar.grass(month);
+                let mut grown = b0;
+                for _ in 0..24 {
+                    grown = crate::world::grass_step(grown, &c.vegetation, m);
+                }
+                let n_stats = sim.stats.len();
+                sim.run_days(1);
+                let d = &sim.stats[n_stats..];
+                let births: usize = d.iter().map(|s| s.births).sum();
+                let hunger: usize = d.iter().map(|s| s.deaths_hunger).sum();
+                let predation: usize = d.iter().map(|s| s.deaths_predation).sum();
+                let fox_births: usize = d.iter().map(|s| s.fox_births).sum();
+                let fox_hunger: usize = d.iter().map(|s| s.fox_deaths_hunger).sum();
+                let fox_hunger_young: usize = d.iter().map(|s| s.fox_deaths_hunger_young).sum();
+                emig += d.iter().map(|s| s.fox_emigrants).sum::<usize>() as f32;
+                flo += d.iter().map(|s| s.fox_floaters).sum::<usize>() as f32;
+                immig += d.iter().map(|s| s.fox_immigrants).sum::<usize>() as f32;
+                let young = f0 - fox_ad;
+                young_hunger_num += fox_hunger_young as f32;
+                young_hunger_den += young;
+                adult_hunger_num += (fox_hunger - fox_hunger_young) as f32;
+                adult_hunger_den += fox_ad;
+                let b1 = sim.world.mean_biomass();
+                let breed = c.calendar.rabbit_breed_chance(month) / c.calendar.days_per_month as f32;
+                birth_num += births as f32;
+                birth_den += ad * reserve * breed * (1.0 + c.rabbit.litter_extra);
+                if r0 > 0.0 {
+                    reserve_pts.push((b0 * cells / r0, reserve, 1.0));
+                    hunger_pts.push((b0, hunger as f32, r0));
+                    eaten_num += (grown - b1).max(0.0) * cells;
+                    eaten_den += r0 * b0 / (b0 + c.rabbit.half_saturation);
+                }
+                if f0 > 0.0 {
+                    prey_pts.push((r0 * REFERENCE_CELLS / cells, predation as f32, f0));
+                    fox_hunger_pts_dens.push((f0 * REFERENCE_CELLS / cells, 0.0, 1.0));
+                    fox_hunger_pts.push((r0 / f0, fox_hunger as f32, f0));
+                    let floaters: usize = d.iter().map(|s| s.fox_floaters).sum();
+                    leave_pts.push((r0 * REFERENCE_CELLS / cells, f0 * REFERENCE_CELLS / cells, floaters as f32));
+                    leave_month[month].0 += floaters as f32;
+                    leave_month[month].1 += f0;
+                    pred += predation as f32;
+                    fox_days += f0;
+                }
+                match (ct, ct_start) {
+                    (true, None) => ct_start = Some((f0, fox_ad, fox_births)),
+                    (true, Some((f, a, n))) => ct_start = Some((f, a, n + fox_births)),
+                    (false, Some((f, a, n))) => {
+                        if a > 0.0 {
+                            fox_birth_pts.push((f * REFERENCE_CELLS / cells, n as f32, a));
+                        }
+                        ct_start = None;
+                    }
+                    _ => {}
+                }
+                if day % 50 == 25 {
+                    let mean = sim.world.mean_biomass();
+                    for y in 0..sim.world.height {
+                        for x in 0..sim.world.width {
+                            if !sim.world.is_water(x, y) && mean > 0.0 {
+                                spread.push(sim.world.biomass_at(x, y) / mean);
+                            }
+                        }
+                    }
+                    for r in &sim.rabbits {
+                        re.push(r.energy);
+                        rn += 1.0;
+                        if sim.world.is_burrow(r.x, r.y) { burrow += 1.0; }
+                        if r.cooldown > 0 { rwait += 1.0; }
+                    }
+                    for f in &sim.foxes {
+                        fe.push(f.energy);
+                        fn_ += 1.0;
+                        if f.cooldown > 0 { fwait += 1.0; }
+                        if f.satiety > 0 { fsat += 1.0; }
+                    }
+                }
+            }
+        }
+        println!("birth_factor: {:.3}", birth_num / birth_den);
+        println!("reserve_target: {:?}", tabela(reserve_pts, 8));
+        println!("hunger: {:?}", tabela(hunger_pts, 12));
+        println!("prey_per_fox: {:.3}", pred / fox_days);
+        println!("prey_per_fox por coelhos: {:?}", tabela(prey_pts, 10));
+        println!("fome por dia: jovens {:.4} adultos {:.4}", young_hunger_num / young_hunger_den, adult_hunger_num / adult_hunger_den);
+        println!("fox_births: {:?}", tabela(fox_birth_pts, 8));
+        let _ = fox_hunger_pts_dens;
+        println!("fox_hunger: {:?}", tabela(fox_hunger_pts, 10));
+        let meses: Vec<String> = leave_month.iter().map(|(n, d)| format!("{:.3}", n / d.max(1e-9))).collect();
+        println!("flutuantes que partem por raposa e por dia, de janeiro a dezembro: {}", meses.join(" "));
+        // fox_leave: por faixas de coelhos e de raposas em cada 24x24.
+        for (rlo, rhi) in [(0.0, 100.0), (100.0, 200.0), (200.0, 300.0), (300.0, 400.0), (400.0, 2000.0)] {
+            let mut line = format!("fox_leave coelhos {rlo}–{rhi}:");
+            for (flo, fhi) in [(0.0, 4.5), (4.5, 6.5), (6.5, 8.5), (8.5, 11.0), (11.0, 100.0)] {
+                let sel: Vec<_> = leave_pts.iter().filter(|p: &&(f32, f32, f32)| p.0 >= rlo && p.0 < rhi && p.1 >= flo && p.1 < fhi).collect();
+                let n: f32 = sel.iter().map(|p| p.2).sum();
+                let d: f32 = sel.iter().map(|p| p.1).sum();
+                line += &format!(" raposas {flo}–{fhi}: {:.3} ({} dias)", n / d.max(1e-9), sel.len());
+            }
+            println!("{line}");
+        }
+        let years = seeds as f32 * 900.0 / Config::default().calendar.days_per_year() as f32;
+        println!("por região e por ano: partem {:.2} (flutuantes {:.2}), chegam {:.2}", emig / years, flo / years, immig / years);
+        println!("grazing: {:.3}", eaten_num / eaten_den);
+        let qs = [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0];
+        println!("biomass_spread: {:?}", quantis(spread, &qs));
+        println!("rabbit_energy: {:?}", quantis(re, &qs));
+        println!("fox_energy: {:?}", quantis(fe, &qs));
+        println!("rabbits_in_burrows {:.3} foxes_satiated {:.3} (à espera, só de referência: coelhos {:.3} raposas {:.3})", burrow / rn, fsat / fn_, rwait / rn, fwait / fn_);
     }
 }

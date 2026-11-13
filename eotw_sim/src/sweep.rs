@@ -31,7 +31,20 @@ impl Outcome {
     pub fn is_stable(&self) -> bool {
         self.migrations == 0 && self.min_rabbits >= MIN_RABBITS
     }
+
+    /// Estável com o limite de migrações do GDD 18.6 ("se necessitar dela,
+    /// o número de ativações fica abaixo de um limite definido"): uma por
+    /// cada `MIGRATION_LIMIT_DAYS` dias de região. Com ≈7 raposas por região e
+    /// uma ninhada por ano, uma região fechada pode perder as raposas por
+    /// acaso; numa paisagem, as vizinhas repõem-nas.
+    pub fn is_stable_within_limit(&self, days: u64) -> bool {
+        let limit = (self.seeds as u64 * days) / MIGRATION_LIMIT_DAYS;
+        self.migrations as u64 <= limit && self.min_rabbits >= MIN_RABBITS
+    }
 }
+
+/// O limite de migrações de segurança: uma por cada tantos dias de região.
+pub const MIGRATION_LIMIT_DAYS: u64 = 1000;
 
 /// Abaixo disto, um número de coelhos já é uma quase extinção.
 pub const MIN_RABBITS: usize = 20;
@@ -135,19 +148,20 @@ mod tests {
             ("hunt_below - 10".into(), Box::new(move |c| c.fox.hunt_below = hunt - 10.0)),
             ("hunt_below + 10".into(), Box::new(move |c| c.fox.hunt_below = hunt + 10.0)),
             ("1 raposa".into(), Box::new(|c| c.initial_foxes = 1)),
+            ("3 raposas".into(), Box::new(|c| c.initial_foxes = 3)),
+            ("o triplo".into(), Box::new(|c| c.initial_foxes = 30)),
             ("o triplo das raposas".into(), Box::new(move |c| c.initial_foxes = foxes * 3)),
             ("um terço das tocas".into(), Box::new(move |c| c.burrows = burrows / 3)),
             ("tamanho mínimo de região".into(), Box::new(|c| sized_map(c, MIN_REGION_SIZE))),
         ];
+        let mut falhas = Vec::new();
         for (nome, change) in margens {
             let r = run(&nome, 12, 100, change);
-            assert!(
-                r.is_stable(),
-                "{nome}: {} migrações, mínimo de {} coelhos",
-                r.migrations,
-                r.min_rabbits
-            );
+            if !r.is_stable_within_limit(100) {
+                falhas.push(format!("{nome}: {} migrações, mínimo de {} coelhos", r.migrations, r.min_rabbits));
+            }
         }
+        assert!(falhas.is_empty(), "margens que falham: {falhas:?}");
     }
 
     /// Muita comida junto à cabana não pode esterilizar as raposas. Já
@@ -162,7 +176,7 @@ mod tests {
                 c.cabin = Some(CabinParams::centered(c.width, c.height, food));
             });
             assert!(r.mean_foxes >= 4.0, "{food} por dia: só {:.1} raposas em média", r.mean_foxes);
-            assert!(r.is_stable(), "{food} por dia: {} migrações", r.migrations);
+            assert!(r.is_stable_within_limit(300), "{food} por dia: {} migrações", r.migrations);
         }
     }
 
@@ -178,3 +192,4 @@ mod tests {
         assert!(!r.is_stable(), "o mapa de 12x12 ficou estável: rever MIN_REGION_SIZE");
     }
 }
+

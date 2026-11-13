@@ -184,7 +184,7 @@ impl Ground for Landscape {
 
 /// A versão do formato dos ficheiros guardados. Sobe quando o que se guarda
 /// muda, para um ficheiro antigo dar um erro claro em vez de carregar mal.
-pub const SAVE_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 7;
 
 #[derive(Serialize)]
 struct SaveRef<'a> {
@@ -1967,15 +1967,21 @@ mod tests {
                 }
             }
         }
+        // Com a demografia do calendário (fase 1 da recalibração, novembro de
+        // 2026), o equilíbrio é de ≈6–7 raposas por região, e a paisagem
+        // começa com ≈5: as primeiras raposas chegam a um mundo com poucos
+        // coelhos e só têm crias uma vez por ano. Antes eram 8–14.
         for (onde, f) in [("janela", janela / n.0), ("agregadas", agregadas / n.1)] {
-            assert!((8.0..14.0).contains(&f), "{onde}: {f:.1} raposas por região");
+            assert!((4.0..9.0).contains(&f), "{onde}: {f:.1} raposas por região");
         }
     }
 
     /// A paisagem tem, em cada região, o mesmo equilíbrio que uma região
-    /// simulada sozinha (cerca de 230 coelhos e 10 raposas), seja na janela
+    /// simulada sozinha (cerca de 280 coelhos e 6–7 raposas), seja na janela
     /// ou agregada. Antes de a raposa ter o gasto e o êxito reais eram cerca
-    /// de 280 coelhos e 8 raposas, e o intervalo foi deslocado com eles.
+    /// de 280 coelhos e 8 raposas; depois, 230 e 10; com a demografia do
+    /// calendário (fase 1 da recalibração), medido 290 e 6–7. O intervalo
+    /// foi deslocado com eles.
     #[test]
     fn a_paisagem_fica_em_equilibrio() {
         let mut janela = (0.0, 0.0);
@@ -2010,8 +2016,8 @@ mod tests {
         let (rj, fj) = (janela.0 / n.0, janela.1 / n.0);
         let (ra, fa) = (agregadas.0 / n.1, agregadas.1 / n.1);
         for (onde, r, f) in [("janela", rj, fj), ("agregadas", ra, fa)] {
-            assert!((190.0..280.0).contains(&r), "{onde}: {r:.0} coelhos por região");
-            assert!((6.0..15.0).contains(&f), "{onde}: {f:.1} raposas por região");
+            assert!((240.0..340.0).contains(&r), "{onde}: {r:.0} coelhos por região");
+            assert!((4.5..10.0).contains(&f), "{onde}: {f:.1} raposas por região");
         }
     }
 

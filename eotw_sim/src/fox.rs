@@ -135,11 +135,113 @@ pub struct FoxParams {
     /// juntavam-se todas lá, tinham sempre rivais perto e deixavam de ter crias,
     /// por mais comida que houvesse (o travão contava vizinhas e não comida).
     pub scrap_energy_per_extra_fox: f32,
+    /// A reprodução é um evento do calendário, uma vez por ano (relatório
+    /// "Raposa a fundo", B1–B3). A energia só serve de travão (design). Com
+    /// 50, metade do máximo, quase não pariam: de dia a raposa só caça abaixo
+    /// de 20, por isso a energia anda entre 20 e 70 e passava a época das
+    /// crias quase toda abaixo de 50.
     pub repro_threshold: f32,
+    /// Abaixo desta energia a raposa está esfomeada: caça o coelho que vê em
+    /// vez de seguir o cheiro dos restos (design).
+    pub starving_energy: f32,
+    /// Energia que o parto custa de uma vez. É 0: o custo está todo na
+    /// lactação (`lactation_cost`). Com 35 de uma vez e o travão a 30, uma
+    /// raposa com 30 de energia paria e morria logo.
     pub repro_cost: f32,
     pub newborn_energy: f32,
+    /// Uma ninhada por ano. Fica abaixo de um ano (864 ticks) de propósito:
+    /// com um ano exato, a raposa que pariu a meio da época chegava à época
+    /// seguinte ainda à espera, e metade das ninhadas falhava. Como a época
+    /// das crias só dura 2 meses (144 ticks), 720 continua a dar uma por ano.
     pub repro_cooldown: u64,
+    /// Até esta idade é juvenil (um ano, 864 ticks), para a mortalidade.
+    pub juvenile_ticks: u64,
+    /// Probabilidade de parir em cada tick. A simulação põe-no a partir do
+    /// calendário (`CalendarParams::fox_breed_chance`); fora da época é 0.
+    pub breed_per_tick: f32,
+    /// Crias por ninhada e por raposa: 1, e mais uma com esta probabilidade.
+    /// A ninhada é de 3,1–3,3 em Doñana e 3,6 no Ebro (Devenish-Nelson 2012,
+    /// verificado); sem sexos no jogo, cada raposa conta metade: 1,8 com a
+    /// do Ebro. Com a de Doñana (1,55) a população ficava à beira de λ = 1 e
+    /// descia devagar; com a do Ebro aguenta-se em ≈6–7 por região.
+    pub litter_extra: f32,
+
+    /// Fração dos adultos que num ano não criam: 13,2% em Doñana
+    /// (Devenish-Nelson 2012, verificado).
+    pub nonbreeding: f32,
+    /// O travão de densidade: cada raposa rival a `territory_radius` ou
+    /// menos, além das que os restos de comida permitem, junta isto à
+    /// probabilidade de não criar nesse ano. A fração de fêmeas que não criam
+    /// sobe com a densidade, de ≈13% até 25–50% e mais (Devenish-Nelson
+    /// 2012, verificado; o mecanismo principal da dependência da densidade).
+    /// Antes era um travão total (nenhuma rival e cria, uma rival e não),
+    /// que funcionava com crias a qualquer altura do ano; com uma só época
+    /// por ano, duas raposas na mesma região quase nunca criavam. Medido:
+    /// com 0,2 ficavam 3 raposas por região, com 0,03 ficam ≈8 e os coelhos
+    /// comidos por ano são ≈33% do stock (alvo do relatório: 30–60%).
+    pub rival_suppression: f32,
+    /// A lactação: durante tantos ticks a mãe gasta `lactation_cost` a mais
+    /// por tick, e as crias ficam na toca sem caçar nem gastar. Cerca de 5
+    /// semanas, ≈84 ticks no relógio comprimido, a comer o dobro: o consumo
+    /// médio de um dia (≈29,6) a dividir por 24 ≈ 1,24 a mais por tick. Como
+    /// a ninhada, conta metade: sem sexos, cada raposa é meio casal, e o
+    /// macho também leva comida à toca. Fica 0,62 por tick, ≈52 por ninhada
+    /// e por raposa (≈104 por casal). Com 1,24 inteiro, muitas mães morriam
+    /// de fome logo depois do parto.
+    pub lactation_ticks: u64,
+    pub lactation_cost: f32,
+    /// A probabilidade de uma raposa jovem (até `juvenile_ticks`, já
+    /// desmamada) partir neste tick. A simulação põe-no a partir do
+    /// calendário (`CalendarParams::fox_dispersal_chance`): a tabela de
+    /// Bristol, de outubro a março, ≈33% dos jovens no ano.
+    pub dispersal_per_tick: f32,
+    /// Uma raposa sem lugar (com mais rivais perto do que o travão aceita) e
+    /// com fome (abaixo de `floater_energy`) parte com esta probabilidade
+    /// por tick: as flutuantes, sem território, não ficam a morrer de fome
+    /// onde as residentes caçam, vão-se embora (design). Sem isto, 30 raposas
+    /// numa região comiam os coelhos todos e morriam a seguir. Com o limiar
+    /// em 20 (`starving_energy`) morriam de fome antes de chegar à margem.
+    /// Com 0,1 por tick e só adultas a partir: com 30, as 30 raposas
+    /// iniciais deixavam 8 coelhos; com 40, 30 coelhos, e o equilíbrio fica
+    /// em ≈8 raposas; com 50 ficavam ≈6. Uma mãe a amamentar não parte: antes, a lactação punha-as
+    /// abaixo do limiar e em abril–maio partiam 5% das raposas por dia,
+    /// deixando as crias. As jovens também não: ficam onde nasceram até à
+    /// dispersão do outono (`dispersal_per_tick`); antes, as crias acabadas
+    /// de desmamar, com fome e rivais à volta, partiam logo em maio.
+    pub floater_leave: f32,
+    pub floater_energy: f32,
+    /// Células por tick de uma raposa a partir. A dispersão vai a 5–30 km,
+    /// muito mais do que a paisagem: quem parte sai do mapa.
+    pub dispersal_speed: usize,
+    /// Raposas que chegam de fora por ano, por cada 24x24 células, a uma
+    /// região vazia. Quem parte vai para fora do mapa, e de fora chegam
+    /// flutuantes à procura de lugar: a paisagem é um pedaço de uma
+    /// população maior. Chegam o ano todo e tanto mais quanto mais lugar há:
+    /// `immigrants_per_year × (1 − raposas / full_density)`; numa região
+    /// cheia não chega nenhuma. Um território vazio volta a ser ocupado
+    /// depressa (o "efeito de vácuo" dos abates de raposas). Os dois valores
+    /// são de design.
+    pub immigrants_per_year: f32,
+    /// Raposas por cada 24x24 células a partir das quais já não chega nenhuma.
+    pub full_density: f32,
+    /// Mortalidade de fundo (estrada, caça, doença, predadores), por tick do
+    /// relógio comprimido: só a parte que não depende da densidade. A
+    /// sobrevivência anual medida, 0,55 nos adultos (Suécia sem sarna,
+    /// Willebrand et al. 2022, verificado) e 0,36–0,48 nos juvenis, inclui
+    /// também as mortes da densidade (fome, lutas, dispersão), que no jogo
+    /// vêm da fome e do travão de território. Com 0,55 e 0,42 de fundo, a
+    /// população ficava presa em λ ≈ 1 e não recuperava de uma queda. Por
+    /// isso: adultos 0,70 por ano (0,70^(1/864) por tick), juvenis 0,60, e
+    /// nas primeiras 4 semanas (≈67 ticks) mais 20% de perda (Harris 1977,
+    /// via Devenish-Nelson). Em equilíbrio, com a fome, a sobrevivência total
+    /// tem de voltar a ficar perto da medida (ver os testes).
+    pub adult_survival: f32,
+    pub juvenile_survival: f32,
+    pub cub_survival: f32,
+    pub cub_ticks: u64,
     pub maturity_ticks: u64,
+    /// Oito anos no relógio comprimido; com a mortalidade de fundo, quase
+    /// nenhuma lá chega (esperança de vida real de 1–3 anos).
     pub max_age_ticks: u64,
 }
 
@@ -176,14 +278,52 @@ impl Default for FoxParams {
             satiety_ticks: 24,
             territory_radius: 9,
             scrap_energy_per_extra_fox: 40.0,
-            repro_threshold: 75.0,
-            repro_cost: 35.0,
+            repro_threshold: 30.0,
+            starving_energy: 20.0,
+            repro_cost: 0.0,
             newborn_energy: 40.0,
-            repro_cooldown: 24 * 20,
-            maturity_ticks: 24 * 30,
-            max_age_ticks: 24 * 400,
+            repro_cooldown: 720,
+            juvenile_ticks: 864,
+            breed_per_tick: 0.0,
+            litter_extra: 0.8,
+
+            nonbreeding: 0.0,
+            rival_suppression: 0.15,
+            lactation_ticks: 84,
+            lactation_cost: 0.62,
+            adult_survival: 0.99959,
+            juvenile_survival: 0.99941,
+            cub_survival: 0.99667,
+            cub_ticks: 67,
+            dispersal_per_tick: 0.0,
+            floater_leave: 0.1,
+            floater_energy: 40.0,
+            dispersal_speed: 2,
+            immigrants_per_year: 12.0,
+            full_density: 10.0,
+            maturity_ticks: 10 * 72,
+            max_age_ticks: 8 * 864,
         }
     }
+}
+
+/// O ponto da margem do mapa mais perto de `(x, y)`.
+fn nearest_edge(world: &World, (x, y): (usize, usize)) -> (usize, usize) {
+    let (w, h) = (world.width - 1, world.height - 1);
+    [(x, (0, y)), (w - x, (w, y)), (y, (x, 0)), (h - y, (x, h))]
+        .into_iter()
+        .min_by_key(|&(d, _)| d)
+        .map(|(_, c)| c)
+        .expect("quatro margens")
+}
+
+/// Porque é que uma raposa está a partir.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Leaving {
+    /// Uma jovem na época da dispersão.
+    Dispersal,
+    /// Uma flutuante sem lugar e com fome.
+    Floater,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -195,13 +335,20 @@ pub struct Fox {
     pub cooldown: u64,
     /// Ticks que faltam até voltar a ter vontade de caçar.
     pub satiety: u64,
+    /// Ticks de lactação que faltam (gasta o dobro).
+    #[serde(default)]
+    pub lactating: u64,
+    /// Está a partir, e porquê: anda para a margem mais perto e, lá chegada,
+    /// sai do mapa.
+    #[serde(default)]
+    pub leaving: Option<Leaving>,
 }
 
 /// O que aconteceu numa raposa durante um tick.
 #[derive(Debug, Default)]
 pub struct FoxTick {
     pub caught: bool,
-    pub baby: Option<Fox>,
+    pub babies: Vec<Fox>,
     /// Andou a seguir o cheiro de restos de comida (para o registo de eventos).
     pub followed_food: bool,
 }
@@ -215,6 +362,8 @@ impl Fox {
             age: 0,
             cooldown: 0,
             satiety: 0,
+            lactating: 0,
+            leaving: None,
         }
     }
 
@@ -253,10 +402,37 @@ impl Fox {
         self.age += 1;
         self.cooldown = self.cooldown.saturating_sub(1);
         self.satiety = self.satiety.saturating_sub(1);
+        if self.age <= p.lactation_ticks {
+            // Uma cria ainda a mamar fica na toca e não caça: quem a alimenta
+            // é a mãe, que paga `lactation_cost`. Antes, a cria caçava sozinha
+            // desde a primeira hora e morria de fome em poucos dias.
+            return result;
+        }
         self.energy -= p.metabolism;
 
-        let hungry = self.satiety == 0 && self.energy < p.hunt_below;
+        if self.leaving.is_none() {
+            self.leaving = self.decides_to_leave(world, rng, p, rivals);
+        }
         let me = (self.x, self.y);
+        if self.leaving.is_some() {
+            // A partir: não caça nem come, só anda para a margem mais perto,
+            // e foge do jogador se ele estiver no caminho.
+            for _ in 0..p.dispersal_speed {
+                let here = (self.x, self.y);
+                (self.x, self.y) = match player.filter(|&h| distance(h, here) <= p.human_fear) {
+                    Some(human) => step_away(world, rng, here, human),
+                    None => step_toward(world, rng, here, nearest_edge(world, here)),
+                };
+                self.energy -= p.move_cost;
+            }
+            return result;
+        }
+
+        // Saciada não caça, mas só enquanto tem reservas: abaixo de
+        // `starving_energy` volta a ter fome. Uma mãe a amamentar comia um
+        // coelho, ficava saciada um dia a gastar a lactação e acordava sem
+        // tempo para caçar antes de morrer.
+        let hungry = (self.satiety == 0 || self.energy < p.starving_energy) && self.energy < p.hunt_below;
         if let Some(human) = player.filter(|&h| distance(h, me) <= p.human_fear) {
             // O jogador está perto: afasta-se, e hoje não há caça nem restos.
             (self.x, self.y) = step_away(world, rng, me, human);
@@ -282,12 +458,17 @@ impl Fox {
             let eaten = world.take_carcass(self.x, self.y, p.carrion_bite);
             self.energy += p.metabolism - p.rest_metabolism;
             self.energy = (self.energy + eaten * p.energy_per_carrion).min(p.energy_max);
-        } else if let Some(next) = hungry
+        } else if let Some(next) = (hungry
+            && !(self.energy < p.starving_energy && nearest_rabbit(rabbits, nearby, world, self.x, self.y, p.vision).is_some()))
             .then(|| sniff(world, rng, Scent::Food, (self.x, self.y), p.scavenge_smell_min))
             .flatten()
             .filter(|&c| !smells_human(world, c, p))
         {
-            // Cheiro forte de restos: vai lá em vez de caçar.
+            // Cheiro forte de restos: vai lá em vez de caçar (é necrófaga),
+            // a não ser que esteja esfomeada e veja um coelho. Sem essa
+            // exceção, com a cabana as raposas ficavam presas ao cheiro dos
+            // restos já comidos e morriam de fome com coelhos à vista (6 de
+            // 40 seeds sem raposas com 50 restos por dia).
             (self.x, self.y) = next;
             self.energy -= p.move_cost;
             result.followed_food = true;
@@ -338,16 +519,52 @@ impl Fox {
             self.energy += p.metabolism - p.rest_metabolism;
         }
 
-        if self.age >= p.maturity_ticks
+        if self.lactating > 0 {
+            self.lactating -= 1;
+            self.energy -= p.lactation_cost;
+        }
+        if p.breed_per_tick > 0.0
+            && self.age >= p.maturity_ticks
             && self.cooldown == 0
             && self.energy >= p.repro_threshold
-            && rivals <= self.rivals_allowed(world, p)
+            && rng.next_f32() < p.breed_per_tick
         {
-            self.energy -= p.repro_cost;
+            // Este ano já não volta a tentar, crie ou não.
             self.cooldown = p.repro_cooldown;
-            result.baby = Some(Fox::newborn(self.x, self.y, p.newborn_energy));
+            let crowded = rivals.saturating_sub(self.rivals_allowed(world, p)) as f32;
+            let skip = (p.nonbreeding + p.rival_suppression * crowded).min(1.0);
+            if rng.next_f32() >= skip {
+                self.energy -= p.repro_cost;
+                self.lactating = p.lactation_ticks;
+                let n = 1 + (rng.next_f32() < p.litter_extra) as usize;
+                result.babies = (0..n).map(|_| Fox::newborn(self.x, self.y, p.newborn_energy)).collect();
+            }
         }
         result
+    }
+
+    /// Se parte neste tick: jovem na época da dispersão, ou sem lugar e
+    /// esfomeada (`dispersal_per_tick`, `floater_leave`).
+    fn decides_to_leave(&self, world: &World, rng: &mut Rng, p: &FoxParams, rivals: usize) -> Option<Leaving> {
+        let young = self.age < p.juvenile_ticks;
+        if young && p.dispersal_per_tick > 0.0 && rng.next_f32() < p.dispersal_per_tick {
+            return Some(Leaving::Dispersal);
+        }
+        // Uma mãe com crias na toca é residente: não parte, mesmo com fome.
+        // As jovens ficam onde nasceram até à dispersão (acima); só as
+        // adultas partem como flutuantes.
+        (p.floater_leave > 0.0
+            && self.lactating == 0
+            && self.age >= p.maturity_ticks
+            && self.energy < p.floater_energy
+            && rivals > self.rivals_allowed(world, p)
+            && rng.next_f32() < p.floater_leave)
+            .then_some(Leaving::Floater)
+    }
+
+    /// Está numa margem do mapa (onde uma raposa a partir sai).
+    pub fn on_edge(&self, world: &World) -> bool {
+        self.x == 0 || self.y == 0 || self.x + 1 == world.width || self.y + 1 == world.height
     }
 
     /// Quantas rivais o travão de densidade tolera aqui: nenhuma, mais uma por
@@ -444,6 +661,11 @@ mod tests {
         World::new(12, 12, VegetationParams::default(), &mut rng)
     }
 
+    /// Uma raposa adulta: as crias acabadas de nascer ficam na toca a mamar.
+    fn adulta(x: usize, y: usize, energy: f32) -> Fox {
+        Fox { age: FoxParams::default().maturity_ticks, ..Fox::newborn(x, y, energy) }
+    }
+
     /// Parâmetros sem sorte: apanha sempre e a vegetação não protege.
     fn certeira() -> FoxParams {
         FoxParams {
@@ -471,7 +693,7 @@ mod tests {
                 let mut world = mundo();
                 world.set_biomass(5, 5, erva);
                 let mut rng = Rng::new(seed);
-                let mut fox = Fox::newborn(5, 5, 40.0);
+                let mut fox = adulta(5, 5, 40.0);
                 fox.act(&mut [], &mut world, &mut rng, &p, 0, None);
                 if fox.energy > 40.0 - p.metabolism {
                     apanhou += 1;
@@ -489,7 +711,7 @@ mod tests {
     fn raposa_apanha_coelho_ao_lado() {
         let mut world = mundo();
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(5, 5, 50.0);
+        let mut fox = adulta(5, 5, 50.0);
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
         let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(tick.caught);
@@ -502,7 +724,7 @@ mod tests {
     fn raposa_saciada_nao_caca() {
         let mut world = mundo();
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(5, 5, 50.0);
+        let mut fox = adulta(5, 5, 50.0);
         fox.satiety = 10;
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
         let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
@@ -514,7 +736,7 @@ mod tests {
     fn raposa_persegue_coelho_que_ve() {
         let mut world = mundo();
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(2, 2, 50.0);
+        let mut fox = adulta(2, 2, 50.0);
         let mut rabbits = vec![Rabbit::newborn(2, 6, 50.0)];
         fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         // Estava a 4 células e anda 2 por tick quando persegue.
@@ -525,23 +747,26 @@ mod tests {
     fn com_rival_no_territorio_nao_tem_crias() {
         let mut world = mundo();
         let mut rng = Rng::new(1);
-        let p = FoxParams::default();
+        // Na época das crias, e sem raposas que não criem, para o teste ser certo.
+        let p = FoxParams { breed_per_tick: 1.0, nonbreeding: 0.0, ..FoxParams::default() };
         let adulta = || {
-            let mut f = Fox::newborn(5, 5, 95.0);
+            let mut f = adulta(5, 5, 95.0);
             f.age = p.maturity_ticks;
             f.satiety = 5; // saciada: não se distrai a caçar
             f
         };
         let sozinha = adulta().act(&mut [], &mut world, &mut rng, &p, 0, None);
-        let com_rival = adulta().act(&mut [], &mut world, &mut rng, &p, 1, None);
-        assert!(sozinha.baby.is_some());
-        assert!(com_rival.baby.is_none());
+        // Com rivais suficientes a probabilidade de criar chega a 0.
+        let rivais = (1.0 / p.rival_suppression).ceil() as usize;
+        let com_rival = adulta().act(&mut [], &mut world, &mut rng, &p, rivais, None);
+        assert!(!sozinha.babies.is_empty());
+        assert!(com_rival.babies.is_empty());
         // Com restos que cheguem para duas raposas a mais, duas rivais já não travam.
         world.add_scraps(5, 8, 2.0 * p.scrap_energy_per_extra_fox / p.energy_per_scrap);
         let com_comida = adulta().act(&mut [], &mut world, &mut rng, &p, 2, None);
-        let demasiadas = adulta().act(&mut [], &mut world, &mut rng, &p, 3, None);
-        assert!(com_comida.baby.is_some());
-        assert!(demasiadas.baby.is_none());
+        let demasiadas = adulta().act(&mut [], &mut world, &mut rng, &p, 2 + rivais, None);
+        assert!(!com_comida.babies.is_empty());
+        assert!(demasiadas.babies.is_empty());
     }
 
     #[test]
@@ -549,7 +774,7 @@ mod tests {
         let mut world = mundo();
         world.add_scraps(5, 5, 5.0);
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(5, 5, 40.0);
+        let mut fox = adulta(5, 5, 40.0);
         fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
         assert!(fox.energy > 40.0);
         assert!(world.scraps_at(5, 5) < 5.0);
@@ -564,7 +789,7 @@ mod tests {
         world.add_scraps(5, 5, 1000.0);
         let mut rng = Rng::new(1);
         let p = FoxParams::default();
-        let mut fox = Fox::newborn(5, 5, p.hunt_below + 1.0);
+        let mut fox = adulta(5, 5, p.hunt_below + 1.0);
         for _ in 0..200 {
             fox.act(&mut [], &mut world, &mut rng, &p, 0, None);
         }
@@ -577,7 +802,7 @@ mod tests {
         // Cheiro forte de restos a oeste; um coelho à vista a leste.
         world.scent.deposit(Scent::Food, 3, 5, 50.0);
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(4, 5, 40.0);
+        let mut fox = adulta(4, 5, 40.0);
         let mut rabbits = vec![Rabbit::newborn(8, 5, 50.0)];
         fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert_eq!((fox.x, fox.y), (3, 5));
@@ -587,7 +812,7 @@ mod tests {
     fn raposa_foge_do_jogador_mesmo_com_fome() {
         let mut world = mundo();
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(5, 5, 30.0);
+        let mut fox = adulta(5, 5, 30.0);
         // Um coelho ao lado, mas o jogador também está perto.
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
         let jogador = (5, 3);
@@ -605,7 +830,7 @@ mod tests {
             world.scent.deposit(Scent::Human, c.0, c.1, 5.0);
         }
         for _ in 0..20 {
-            let mut fox = Fox::newborn(5, 5, 40.0);
+            let mut fox = adulta(5, 5, 40.0);
             fox.act(&mut [], &mut world, &mut rng, &sem_roedores(), 0, None);
             assert_eq!((fox.x, fox.y), (6, 5));
         }
@@ -620,7 +845,7 @@ mod tests {
         world.scent.deposit(Scent::Human, 4, 5, 3.0);
         world.scent.deposit(Scent::Human, 5, 6, 2.0);
         // Saciada: sem o cheiro ficava a descansar. Sai para onde cheira menos.
-        let mut fox = Fox::newborn(5, 5, 90.0);
+        let mut fox = adulta(5, 5, 90.0);
         fox.satiety = 10;
         fox.act(&mut [], &mut world, &mut rng, &FoxParams::default(), 0, None);
         assert_eq!((fox.x, fox.y), (6, 5));
@@ -631,7 +856,7 @@ mod tests {
         let mut world = mundo();
         world.add_burrow(5, 6);
         let mut rng = Rng::new(1);
-        let mut fox = Fox::newborn(5, 5, 50.0);
+        let mut fox = adulta(5, 5, 50.0);
         let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
         let tick = fox.act(&mut rabbits, &mut world, &mut rng, &certeira(), 0, None);
         assert!(!tick.caught);
@@ -650,11 +875,11 @@ mod tests {
         let mut rng = Rng::new(9);
         let (mut expostos, mut abrigados) = (0, 0);
         for _ in 0..1000 {
-            let mut fox = Fox::newborn(0, 0, 50.0);
+            let mut fox = adulta(0, 0, 50.0);
             if fox.act(&mut [Rabbit::newborn(0, 1, 50.0)], &mut world, &mut rng, &p, 0, None).caught {
                 expostos += 1;
             }
-            let mut fox = Fox::newborn(6, 6, 50.0);
+            let mut fox = adulta(6, 6, 50.0);
             if fox.act(&mut [Rabbit::newborn(6, 7, 50.0)], &mut world, &mut rng, &p, 0, None).caught {
                 abrigados += 1;
             }
@@ -672,13 +897,13 @@ mod tests {
         let mut apanhados_expostos = 0;
         let mut apanhados_escondidos = 0;
         for _ in 0..1000 {
-            let mut fox = Fox::newborn(0, 0, 50.0);
+            let mut fox = adulta(0, 0, 50.0);
             let mut exposto = vec![Rabbit::newborn(0, 1, 50.0)];
             if fox.act(&mut exposto, &mut world, &mut rng, &p, 0, None).caught {
                 apanhados_expostos += 1;
             }
             // Célula (6, 7) começa com bastante vegetação (entre 40% e 100%).
-            let mut fox = Fox::newborn(6, 6, 50.0);
+            let mut fox = adulta(6, 6, 50.0);
             let mut escondido = vec![Rabbit::newborn(6, 7, 50.0)];
             if fox.act(&mut escondido, &mut world, &mut rng, &p, 0, None).caught {
                 apanhados_escondidos += 1;
@@ -688,5 +913,73 @@ mod tests {
             apanhados_escondidos < apanhados_expostos,
             "escondidos {apanhados_escondidos}, expostos {apanhados_expostos}"
         );
+    }
+
+    /// Uma cria a mamar fica na toca: não anda, não caça e não gasta (quem
+    /// paga é a mãe, com `lactation_cost`).
+    #[test]
+    fn cria_a_mamar_fica_na_toca() {
+        let p = certeira();
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        let mut cria = Fox::newborn(5, 5, 40.0);
+        let mut rabbits = vec![Rabbit::newborn(5, 6, 50.0)];
+        for _ in 0..p.lactation_ticks - 1 {
+            let tick = cria.act(&mut rabbits, &mut world, &mut rng, &p, 0, None);
+            assert!(!tick.caught);
+        }
+        assert_eq!((cria.x, cria.y, cria.energy), (5, 5, 40.0));
+        assert!(!rabbits[0].eaten);
+    }
+
+    /// Uma raposa a partir anda para a margem mais perto e não caça.
+    #[test]
+    fn a_partir_vai_para_a_margem() {
+        let p = certeira();
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        let mut fox = adulta(3, 6, 50.0);
+        fox.leaving = Some(Leaving::Dispersal);
+        let mut rabbits = vec![Rabbit::newborn(3, 7, 50.0)];
+        fox.act(&mut rabbits, &mut world, &mut rng, &p, 0, None);
+        assert!(!rabbits[0].eaten);
+        fox.act(&mut rabbits, &mut world, &mut rng, &p, 0, None);
+        assert_eq!(fox.x, 0, "anda {} células por tick para a margem esquerda", p.dispersal_speed);
+        assert!(fox.on_edge(&world));
+    }
+
+    /// Partem como flutuantes as adultas com fome e rivais a mais; não partem
+    /// as que têm comida, as sozinhas, as mães a amamentar nem as jovens.
+    #[test]
+    fn quem_parte_como_flutuante() {
+        let p = FoxParams { floater_leave: 1.0, ..sem_roedores() };
+        let parte = |mut fox: Fox, rivals: usize| {
+            let mut world = mundo();
+            let mut rng = Rng::new(1);
+            fox.act(&mut [], &mut world, &mut rng, &p, rivals, None);
+            fox.leaving
+        };
+        let fome = p.floater_energy - 5.0;
+        assert_eq!(parte(adulta(5, 5, fome), 2), Some(Leaving::Floater));
+        assert_eq!(parte(adulta(5, 5, p.floater_energy + 10.0), 2), None);
+        assert_eq!(parte(adulta(5, 5, fome), 0), None);
+        let mae = Fox { lactating: 10, ..adulta(5, 5, fome) };
+        assert_eq!(parte(mae, 2), None);
+        let jovem = Fox { age: p.lactation_ticks + 10, ..Fox::newborn(5, 5, fome) };
+        assert_eq!(parte(jovem, 2), None);
+    }
+
+    /// Na época da dispersão, as jovens partem; as adultas não.
+    #[test]
+    fn as_jovens_dispersam() {
+        let p = FoxParams { dispersal_per_tick: 1.0, ..sem_roedores() };
+        let mut world = mundo();
+        let mut rng = Rng::new(1);
+        let mut jovem = Fox { age: p.lactation_ticks + 10, ..Fox::newborn(5, 5, 80.0) };
+        let mut adulta = Fox { age: p.juvenile_ticks, ..Fox::newborn(5, 5, 80.0) };
+        jovem.act(&mut [], &mut world, &mut rng, &p, 0, None);
+        adulta.act(&mut [], &mut world, &mut rng, &p, 0, None);
+        assert_eq!(jovem.leaving, Some(Leaving::Dispersal));
+        assert_eq!(adulta.leaving, None);
     }
 }

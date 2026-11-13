@@ -98,7 +98,19 @@ pub struct Climate {
     /// Probabilidade de uma raposa jovem macho dispersar durante o mês.
     pub fox_dispersal_male: [f32; 12],
     pub fox_dispersal_female: [f32; 12],
+    /// Multiplicador do crescimento da erva em cada mês, com média 1
+    /// (relatório "Plantas a fundo", P3 e M1). Mediterrânico: a primavera dá
+    /// 60–70% da produção, o outono 15–20%, o inverno 5–15% e o verão nada
+    /// (AGFORWARD, dehesa). Atlântico: pico em maio (76 kg/ha/dia na Irlanda
+    /// do Norte) e o outono a um terço disso; o resto da forma é design.
+    pub grass_month: [f32; 12],
 }
+
+/// As curvas de crescimento da erva, de janeiro a dezembro, com média 1.
+const GRASS_MEDITERRANEAN: [f32; 12] = [0.36, 0.72, 1.92, 3.00, 2.64, 0.72, 0.0, 0.0, 0.12, 0.84, 1.20, 0.48];
+const GRASS_ATLANTIC: [f32; 12] = [0.15, 0.30, 0.60, 1.36, 2.26, 1.96, 1.66, 1.51, 1.21, 0.60, 0.24, 0.15];
+/// Design: invernos frios sem crescimento, verão longo.
+const GRASS_CONTINENTAL: [f32; 12] = [0.0, 0.0, 0.3, 1.2, 2.4, 2.4, 2.0, 1.6, 1.2, 0.6, 0.3, 0.0];
 
 use Breeding::{Nao as N, Pico as P, Pouca as Q, Sim as S};
 use FoxPhase::{
@@ -135,6 +147,7 @@ impl Climate {
             fox_phase: [Ac, Ge, Ct, Ct, Cf, Cf, Fa, Fa, Fa, Di, Di, Di],
             fox_dispersal_male: BRISTOL_MALE,
             fox_dispersal_female: BRISTOL_FEMALE,
+            grass_month: GRASS_MEDITERRANEAN,
         }
     }
 
@@ -150,6 +163,7 @@ impl Climate {
             fox_phase: [Ac, Ge, Ct, Ct, Cf, Cf, Fa, Fa, Fa, Di, Di, Di],
             fox_dispersal_male: BRISTOL_MALE,
             fox_dispersal_female: BRISTOL_FEMALE,
+            grass_month: GRASS_ATLANTIC,
         }
     }
 
@@ -165,6 +179,7 @@ impl Climate {
             fox_phase: [Di, Ac, Ge, Ct, Ct, Cf, Cf, Fa, Fa, Di, Di, Di],
             fox_dispersal_male: BRISTOL_MALE,
             fox_dispersal_female: BRISTOL_FEMALE,
+            grass_month: GRASS_CONTINENTAL,
         }
     }
 
@@ -247,7 +262,7 @@ impl CalendarParams {
     }
 
     /// O mês do calendário do norte que corresponde ao mês local.
-    fn northern(&self, month: usize) -> usize {
+    pub(crate) fn northern(&self, month: usize) -> usize {
         (month + self.climate.hemisphere_shift) % 12
     }
 
@@ -272,8 +287,53 @@ impl CalendarParams {
         self.climate.rabbit_breeding[self.northern(month)]
     }
 
+    /// O multiplicador do crescimento da erva neste mês.
+    pub fn grass(&self, month: usize) -> f32 {
+        self.climate.grass_month[self.northern(month)]
+    }
+
+    /// A probabilidade de uma coelha adulta parir num mês, pela época de cria
+    /// (relatório "Coelho a fundo", B2; a escala é a de Calvete et al. 2005):
+    /// sem cria 0, pouca 0,1, cria 0,4, pico 0,6. Na Ibéria dá ≈3,7 ninhadas
+    /// por ano, dentro das 2–4 medidas (Villafuerte, verificado).
+    pub fn rabbit_breed_chance(&self, month: usize) -> f32 {
+        match self.rabbit_breeding(month) {
+            Breeding::Nao => 0.0,
+            Breeding::Pouca => 0.1,
+            Breeding::Sim => 0.4,
+            Breeding::Pico => 0.6,
+        }
+    }
+
     pub fn fox_phase(&self, month: usize) -> FoxPhase {
         self.climate.fox_phase[self.northern(month)]
+    }
+
+    /// Quantos ticks dura a época das crias das raposas no ano.
+    pub fn fox_cub_season_ticks(&self) -> u64 {
+        (0..12).filter(|&m| self.fox_phase(m) == FoxPhase::CriasNaToca).count() as u64
+            * self.ticks_per_month()
+    }
+
+    /// A probabilidade de parir no tick `tick`: 1 / ticks que faltam na época
+    /// das crias, contando com este; fora dela, 0. Assim o parto cai numa
+    /// hora ao acaso da época e é certo até ao fim dela, se a raposa puder
+    /// (relatório "Raposa a fundo": 68–100% criam logo no primeiro inverno;
+    /// quem não cria vem de `FoxParams::nonbreeding`). Com 1/72 por tick em
+    /// 2 meses, só 87% chegavam a tentar.
+    pub fn fox_breed_chance(&self, tick: u64) -> f32 {
+        let date = self.date(tick);
+        if self.fox_phase(date.month) != FoxPhase::CriasNaToca {
+            return 0.0;
+        }
+        let month_ticks = self.ticks_per_month();
+        let mut left = month_ticks - tick % month_ticks;
+        let mut m = (date.month + 1) % 12;
+        while self.fox_phase(m) == FoxPhase::CriasNaToca && left < 12 * month_ticks {
+            left += month_ticks;
+            m = (m + 1) % 12;
+        }
+        1.0 / left as f32
     }
 
     /// A probabilidade de uma raposa jovem dispersar num tick deste mês, para
@@ -288,11 +348,49 @@ impl CalendarParams {
         };
         1.0 - (1.0 - p).powf(1.0 / self.ticks_per_month() as f32)
     }
+
+    /// A probabilidade por tick de uma raposa jovem partir, sem sexos no
+    /// jogo: a média de machos e fêmeas (≈33% no ano todo).
+    pub fn fox_dispersal_chance(&self, month: usize) -> f32 {
+        (self.fox_dispersal_per_tick(month, true) + self.fox_dispersal_per_tick(month, false)) / 2.0
+    }
+
+    /// Ticks desde o início da última época das crias das raposas (a
+    /// primeira hora de `FoxPhase::CriasNaToca`), se houver uma no ano.
+    pub fn ticks_since_fox_cub_season(&self, tick: u64) -> Option<u64> {
+        let date = self.date(tick);
+        let month_ticks = self.ticks_per_month();
+        (0..12usize).find_map(|back| {
+            let m = (date.month + 12 - back) % 12;
+            let prev = (m + 11) % 12;
+            (self.fox_phase(m) == FoxPhase::CriasNaToca && self.fox_phase(prev) != FoxPhase::CriasNaToca)
+                .then(|| back as u64 * month_ticks + tick % month_ticks)
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Dentro da época das crias, a raposa que pode parir pare até ao fim
+    /// dela: o produto de (1 − p) na época dá 0. Fora dela, p = 0.
+    #[test]
+    fn a_raposa_pare_de_certeza_na_epoca() {
+        let c = CalendarParams::default();
+        let year = c.days_per_year() * TICKS_PER_DAY;
+        let mut never = 1.0f64;
+        let mut season = 0;
+        for tick in 0..year {
+            let p = c.fox_breed_chance(tick);
+            if p > 0.0 {
+                season += 1;
+                never *= 1.0 - p as f64;
+            }
+        }
+        assert_eq!(season, c.fox_cub_season_ticks());
+        assert!(never < 1e-6, "{never}");
+    }
 
     fn tick_of(day: u64) -> u64 {
         day * TICKS_PER_DAY
