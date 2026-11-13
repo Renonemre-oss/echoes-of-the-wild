@@ -57,6 +57,17 @@ const LANTERN_LIGHT: f32 = 0.8;
 /// Ritmos possíveis, em horas de jogo por segundo real.
 const SPEEDS: [f32; 6] = [1.0, 4.0, 12.0, 24.0, 72.0, 240.0];
 
+/// Quanto tempo a simulação pode gastar num frame (GDD 18.6: no máximo 8 ms
+/// no pior frame). Uma hora custa ≈0,5 ms e a viragem do dia ≈1–2 ms: a
+/// última hora começada antes do limite ainda cabe nos 8.
+const SIM_BUDGET_MS: f32 = 5.0;
+
+/// Quantos segundos de atraso o relógio guarda. Depois de um frame lento
+/// (a janela a mexer, o sistema ocupado), o jogo recupera esse atraso aos
+/// poucos, em vez de correr dezenas de horas num só frame; o que passar
+/// disto perde-se e o tempo de jogo atrasa-se um pouco.
+const MAX_BACKLOG_SECS: f32 = 0.25;
+
 fn main() {
     let options = Options::from_args();
     let smell = options.smell;
@@ -595,13 +606,14 @@ fn advance(
         perf.sim_ms = 0.0;
         return;
     }
-    clock.pending += time.delta_secs() * SPEEDS[clock.speed];
-    // Um limite por frame, para um frame lento não congelar a janela.
-    let ticks = (clock.pending as u32).min(240);
-    clock.pending -= ticks as f32;
+    let speed = SPEEDS[clock.speed];
+    clock.pending = (clock.pending + time.delta_secs() * speed).min(1.0 + speed * MAX_BACKLOG_SECS);
     let faints = world.0.needs().faints;
-    for _ in 0..ticks {
+    // Corre as horas que faltam enquanto houver tempo neste frame; as
+    // outras ficam para o seguinte.
+    while clock.pending >= 1.0 && start.elapsed().as_secs_f32() * 1000.0 < SIM_BUDGET_MS {
         world.0.step();
+        clock.pending -= 1.0;
     }
     if world.0.needs().faints > faints {
         note.0 = "Desmaiaste de fome. Acordas fraco: procura comida (F) e come (C).".into();
@@ -780,6 +792,8 @@ fn draw_animals(
             items.push(Mark { offset, ..mark(cell, Color::srgb(0.95, 0.12, 0.12), CELL * 0.9, 3.8) });
         }
     }
+    // Só o que está no ecrã: na janela há milhares de coelhos.
+    items.retain(|m| on_screen(m.cell, player));
     // De noite, o que está longe do jogador vê-se mal.
     let light = sim.light();
     for m in &mut items {
@@ -789,7 +803,6 @@ fn draw_animals(
     let me = (player.0 as i64, player.1 as i64);
     items.push(mark(me, Color::srgb(0.95, 0.95, 1.0), CELL * 0.8, 4.0));
     items.push(mark(me, Color::srgb(0.20, 0.45, 0.95), CELL * 0.62, 4.1));
-    items.retain(|m| on_screen(m.cell, player));
 
     let mut sprites = pool.iter_mut();
     for &Mark { cell, offset, color, size, z } in &items {

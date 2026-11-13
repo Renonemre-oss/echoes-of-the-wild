@@ -1354,6 +1354,9 @@ Os valores são ponto de partida e devem ser ajustados com os primeiros resultad
 |---|---|---|---|---|
 | 24 horas/s | 3,7 ms (270 fps) | 6,5 ms | 8,7 ms | 1,7 ms |
 | 240 horas/s | 4,3 ms (230 fps) | 6,1 ms | 8,8 ms | 3,2 ms |
+| 240 horas/s, depois da recalibração (2026-11-13) | 5,1–5,2 ms (≈193 fps) | 7,4–8,6 ms | 10–18 ms | 5,9–7,0 ms |
+
+**Limite da simulação por frame (2026-11-13):** depois da recalibração há mais coelhos e o dobro das raposas, e cada frame desenha mais. O jogo corria as horas em atraso todas de uma vez: depois de um frame lento, um só frame chegou a correr 22 horas (38 ms). Agora a simulação tem no máximo 5 ms por frame; as horas que não cabem passam para o seguinte, e guarda-se no máximo um quarto de segundo de atraso. Uma hora custa 0,54 ms e a viragem do dia 1,06 ms, por isso o pior frame fica abaixo dos 8 ms, a não ser que o sistema interrompa o jogo a meio de uma hora.
 
 Cabe com folga. Uma região longe do jogador (agregada) custa 1,5 µs por dia de jogo, e uma completa 509 µs: o custo está na janela, não no tamanho do mundo. Cada espécie nova tem de voltar a passar por esta medição.
 

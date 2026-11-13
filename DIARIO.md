@@ -7,6 +7,20 @@ As entradas mais recentes ficam no topo. Quando um marco acontece, passa a ✅ n
 
 ---
 
+## 2026-11-13 (sexta-feira)
+### O Prototype 01 validado de novo, e um limite de tempo para a simulação ⏱️
+**Porquê:** a recalibração mudou as populações e a erva, por isso a validação de 11 de novembro já não valia.
+**Medido outra vez** (`docs/Validacao_Prototype01.md`):
+- 20 seeds, 100 dias: nenhuma espécie chegou a 0; a erva média mais baixa foi 25 de 100. Os coelhos têm agora o ciclo do ano, de ≈4700 no fim do inverno a ≈9900 no pico depois das crias.
+- A cabana: raposas ×4,9 nas horas na zona; 102 cadeias "coelho vem pela comida → raposa caça", em 13 de 20 seeds.
+- O desempenho saiu do orçamento: a simulação chegou a 9–10 ms no pior frame (limite 8), e uma vez a 38 ms.
+**A causa:** cada hora custa o mesmo que antes (0,54 ms), mas o jogo corria as horas em atraso todas no mesmo frame. Depois de um frame lento (o portátil estava carregado), um frame correu 22 horas seguidas.
+**O que mudou** (`eotw_game`): a simulação tem no máximo 5 ms por frame; as horas que não cabem passam para o frame seguinte, e guarda-se no máximo um quarto de segundo de atraso. O desenho filtra o que está no ecrã antes de calcular a luz de cada animal.
+**Medido depois:** simulação no pior frame 5,9–7,0 ms; frame no percentil 95 7,4–8,6 ms (limite 10). Numa de 3 corridas houve um pico de 12,9 ms: uma só hora interrompida pelo sistema, com a carga média do portátil a 7. Repetido com o portátil mais livre: simulação no pior frame 5,05 ms, frame p95 7,9 ms.
+**Também:** as raposas no jogo parecem desaparecer no inverno, mas na janela de 3x3 regiões nunca descem de ≈40. As crias na toca desenham-se umas por cima das outras, e de noite as raposas longe do jogador quase não se veem.
+
+---
+
 ## Painel de marcos
 
 | # | Marco | Estado | Data |
